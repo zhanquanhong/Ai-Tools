@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>每日站会闭环管理系统</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", sans-serif;
+    background: #f5f6fa; color: #333; font-size: 14px; line-height: 1.6;
+  }
+  a { color: #1a73e8; text-decoration: none; }
+  .header {
+    background: #fff; border-bottom: 1px solid #e0e0e0; padding: 16px 24px;
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 100;
+  }
+  .header h1 { font-size: 20px; font-weight: 700; color: #1a1a2e; }
+  .header .subtitle { font-size: 12px; color: #888; margin-top: 2px; }
+  .header-actions { display: flex; gap: 8px; align-items: center; }
+  .header .status-badge {
+    display: inline-block; padding: 4px 10px; border-radius: 12px;
+    font-size: 12px; font-weight: 600;
+  }
+  .status-badge.ok { background: #e6f7ee; color: #0a7c42; }
+  .status-badge.warn { background: #fff3e0; color: #e65100; }
+  .status-badge.err { background: #fdecea; color: #c62828; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+  .card {
+    background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    margin-bottom: 20px; overflow: hidden;
+  }
+  .card-header {
+    padding: 14px 20px; border-bottom: 1px solid #eee;
+    font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px;
+  }
+  .card-body { padding: 20px; }
+  .card-footer {
+    padding: 12px 20px; border-top: 1px solid #eee;
+    background: #fafafa; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  }
+  textarea {
+    width: 100%; min-height: 200px; padding: 12px; border: 1px solid #ddd;
+    border-radius: 6px; font-size: 13px; font-family: inherit; resize: vertical; line-height: 1.7;
+  }
+  textarea:focus { outline: none; border-color: #1a73e8; box-shadow: 0 0 0 2px rgba(26,115,232,.15); }
+  input[type="text"], select {
+    padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px;
+  }
+  input[type="text"]:focus, select:focus { outline: none; border-color: #1a73e8; }
+  .form-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .form-row label { font-weight: 600; font-size: 13px; color: #555; min-width: 60px; }
+  .form-row input, .form-row select { flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 18px; border: none; border-radius: 6px;
+    font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: all .15s;
+  }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-primary { background: #1a73e8; color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: #1557b0; }
+  .btn-success { background: #0a7c42; color: #fff; }
+  .btn-success:hover:not(:disabled) { background: #086634; }
+  .btn-warning { background: #e65100; color: #fff; }
+  .btn-warning:hover:not(:disabled) { background: #bf4400; }
+  .btn-outline { background: #fff; color: #555; border: 1px solid #ddd; }
+  .btn-outline:hover:not(:disabled) { background: #f5f5f5; }
+  .btn-sm { padding: 5px 12px; font-size: 12px; }
+  .btn-danger { background: #c62828; color: #fff; }
+  .btn-danger:hover:not(:disabled) { background: #a02020; }
+
+  .table-wrap { overflow-x: auto; }
+  table {
+    width: 100%; border-collapse: collapse; font-size: 13px;
+  }
+  th {
+    background: #f8f9fa; text-align: left; padding: 10px 12px;
+    font-weight: 600; color: #555; border-bottom: 2px solid #e0e0e0;
+    white-space: nowrap; position: sticky; top: 0;
+  }
+  td {
+    padding: 8px 12px; border-bottom: 1px solid #eee; vertical-align: middle;
+  }
+  tr:hover { background: #f8f9ff; }
+  tr.changed { background: #fffde7; }
+  .cell-title { font-weight: 600; color: #1a1a2e; min-width: 120px; font-size: 12px; }
+  .cell-status {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 12px; font-weight: 600;
+  }
+  .status-todo { background: #f5f5f5; color: #666; }
+  .status-progress { background: #e3f2fd; color: #1565c0; }
+  .status-review { background: #fff3e0; color: #e65100; }
+  .status-done { background: #e6f7ee; color: #0a7c42; }
+  .status-overdue { background: #fdecea; color: #c62828; }
+
+  .priority-P0 { color: #c62828; font-weight: 700; }
+  .priority-P1 { color: #e65100; font-weight: 600; }
+  .priority-P2 { color: #1565c0; }
+  .priority-P3 { color: #888; }
+
+  .alert {
+    padding: 12px 16px; border-radius: 6px; margin-bottom: 12px;
+    font-size: 13px; display: none;
+  }
+  .alert.show { display: block; }
+  .alert-info { background: #e3f2fd; color: #1565c0; border: 1px solid #bbdefb; }
+  .alert-success { background: #e6f7ee; color: #0a7c42; border: 1px solid #c8e6c9; }
+  .alert-error { background: #fdecea; color: #c62828; border: 1px solid #ffcdd2; }
+  .alert-warning { background: #fff3e0; color: #e65100; border: 1px solid #ffe0b2; }
+
+  .tabs { display: flex; gap: 0; border-bottom: 2px solid #e0e0e0; margin-bottom: 20px; }
+  .tab {
+    padding: 10px 20px; cursor: pointer; font-weight: 600; font-size: 14px;
+    color: #888; border-bottom: 2px solid transparent; margin-bottom: -2px;
+    transition: all .15s;
+  }
+  .tab:hover { color: #333; }
+  .tab.active { color: #1a73e8; border-bottom-color: #1a73e8; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  .loading {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid #ddd; border-top-color: #1a73e8;
+    border-radius: 50%; animation: spin .6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+  .badge-count { background: #1a73e8; color: #fff; }
+
+  .inline-edit {
+    width: 100%; border: 1px solid #ddd; border-radius: 4px; padding: 4px 8px;
+    font-size: 12px; font-family: inherit; transition: border-color .15s;
+  }
+  .inline-edit:focus { border-color: #1a73e8; outline: none; box-shadow: 0 0 0 2px rgba(26,115,232,.1); }
+  .textarea-cell { resize: vertical; min-height: 36px; line-height: 1.4; }
+
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4);
+    z-index: 200; align-items: center; justify-content: center;
+  }
+  .modal-overlay.show { display: flex; }
+  .modal {
+    background: #fff; border-radius: 10px; width: 90%; max-width: 560px;
+    max-height: 80vh; overflow-y: auto; padding: 24px;
+  }
+  .modal h2 { font-size: 16px; margin-bottom: 16px; }
+  .modal .form-row { flex-direction: column; align-items: stretch; }
+  .modal .form-row label { min-width: auto; margin-bottom: 4px; }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+
+  .stats-bar { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+  .stat-item {
+    background: #fff; padding: 12px 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    min-width: 120px; text-align: center;
+  }
+  .stat-item .num { font-size: 24px; font-weight: 700; }
+  .stat-item .label { font-size: 12px; color: #888; margin-top: 2px; }
+  .num-danger { color: #c62828; }
+  .num-warning { color: #e65100; }
+  .num-info { color: #1565c0; }
+  .num-success { color: #0a7c42; }
+
+  @media (max-width: 768px) {
+    .container { padding: 12px; }
+    .header { flex-direction: column; gap: 8px; }
+    th, td { font-size: 11px; padding: 6px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>📋 每日站会闭环管理</h1>
+    <div class="subtitle">粘贴晨会文本 → AI 自动解析 → 写入飞书多维表格</div>
+  </div>
+  <div class="header-actions">
+    <span id="statusBadge" class="status-badge warn">检查中...</span>
+    <button class="btn btn-outline btn-sm" onclick="showSetupModal()">⚙️ 设置</button>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="tabs" id="tabs">
+    <div class="tab active" data-tab="parse" onclick="switchTab('parse')">📝 晨会录入</div>
+    <div class="tab" data-tab="track" onclick="switchTab('track')">📊 进度跟踪</div>
+  </div>
+
+  <!-- ── Tab 1: 晨会录入 ── -->
+  <div class="tab-content active" id="tab-parse">
+    <div class="card">
+      <div class="card-header">📥 粘贴晨会文本</div>
+      <div class="card-body">
+        <div class="form-row">
+          <label>项目名称</label>
+          <input type="text" id="projectName" placeholder="例：Alpha 项目" style="flex:1;" value="默认项目">
+        </div>
+        <div class="form-row">
+          <label>站会日期</label>
+          <input type="date" id="meetingDate" style="flex:none;width:180px;">
+        </div>
+        <textarea id="inputText" placeholder="粘贴晨会记录文本..."></textarea>
+      </div>
+      <div class="card-footer">
+        <button class="btn btn-primary" onclick="parseText()" id="btnParse">🔍 AI 解析并写入</button>
+        <span style="color:#888;font-size:12px;">填入文本后点击解析，AI 自动拆分并写入飞书</span>
+      </div>
+    </div>
+
+    <div id="previewSection" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <span>📋 解析结果预览</span>
+          <span id="recordCount" class="badge badge-count" style="margin-left:8px;">0 条</span>
+        </div>
+        <div class="card-body">
+          <div id="parseAlert" class="alert"></div>
+          <div class="table-wrap" style="max-height:400px;overflow-y:auto;">
+            <table id="previewTable">
+              <thead>
+                <tr>
+                  <th style="width:40px;">#</th>
+                  <th>环节</th>
+                  <th>事项标题</th>
+                  <th>子项描述</th>
+                  <th>分类</th>
+                  <th>优先级</th>
+                  <th>负责人</th>
+                  <th>当前状态</th>
+                  <th>截止日期</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card-footer">
+          <button class="btn btn-outline" onclick="clearPreview()">清空</button>
+          <span id="writeStatus" style="font-size:13px;font-weight:500;"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Tab 2: 进度跟踪 ── -->
+  <div class="tab-content" id="tab-track">
+    <div class="card" style="margin-bottom:12px;">
+      <div class="card-body" style="padding:12px 16px;">
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+          <div>
+            <div style="font-size:11px;color:#888;margin-bottom:4px;">项目</div>
+            <select id="trackProject" style="min-width:140px;padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;">
+              <option value="">全部项目</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:11px;color:#888;margin-bottom:4px;">站会日期</div>
+            <input type="date" id="trackDate" style="padding:5px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;">
+          </div>
+          <div>
+            <div style="font-size:11px;color:#888;margin-bottom:4px;">状态</div>
+            <select id="trackStatus" style="min-width:120px;padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;">
+              <option value="">全部状态</option>
+              <option value="待处理">待处理</option>
+              <option value="处理中">处理中</option>
+              <option value="待验证">待验证</option>
+              <option value="已闭环">已闭环</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:11px;color:#888;margin-bottom:4px;">事项搜索</div>
+            <input type="text" id="trackKeyword" placeholder="模糊搜索事项..." style="padding:5px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:160px;" onkeydown="if(event.key==='Enter')loadOpenRecords()">
+          </div>
+          <div>
+            <button class="btn btn-primary" onclick="loadOpenRecords()">🔍 查询</button>
+          </div>
+          <div>
+            <button class="btn btn-outline btn-sm" onclick="clearFilters()">清除筛选</button>
+          </div>
+        </div>
+        <!-- 已选条件标签 -->
+        <div id="filterTags" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;min-height:22px;"></div>
+      </div>
+    </div>
+
+    <div class="stats-bar" id="statsBar" style="display:none;">
+      <div class="stat-item"><div class="num" id="statAll" style="color:#1a1a2e;">0</div><div class="label">总计</div></div>
+      <div class="stat-item"><div class="num num-warning" id="statTotal">0</div><div class="label">待处理 <span id="overdueInTodo" style="color:#c62828;font-size:12px;font-weight:400;"></span></div></div>
+      <div class="stat-item"><div class="num num-info" id="statInProgress">0</div><div class="label">处理中 <span id="overdueInProgress" style="color:#c62828;font-size:12px;font-weight:400;"></span></div></div>
+      <div class="stat-item"><div class="num num-success" id="statClosed">0</div><div class="label">已闭环</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span>待闭环事项</span>
+        <span id="selectedCount" style="font-size:12px;color:#888;margin-left:8px;"></span>
+        <span style="margin-left:auto;display:flex;gap:8px;">
+          <button class="btn btn-danger btn-sm" onclick="confirmDeleteAllByDate()" id="btnDeleteByDate" style="display:none;">🗑 删除本日记录</button>
+        </span>
+      </div>
+      <div class="card-body">
+        <div id="trackAlert" class="alert"></div>
+        <div class="table-wrap" style="max-height:600px;overflow-y:auto;">
+          <table id="trackTable">
+            <thead>
+              <tr>
+                <th style="width:30px;"><input type="checkbox" id="selectAll" onchange="toggleAll()"></th>
+                <th style="width:32px;">序号</th>
+                <th style="min-width:100px;">事项</th>
+                <th>负责人</th>
+                <th style="min-width:80px;">状态</th>
+                <th style="min-width:110px;">今日进展</th>
+                <th style="min-width:110px;">下一步计划</th>
+                <th style="min-width:100px;">风险阻塞</th>
+                <th>截止日期</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <div id="trackEmpty" style="text-align:center;padding:40px;color:#999;">暂无待闭环事项</div>
+        </div>
+      </div>
+      <div class="card-footer" style="display:flex;gap:8px;align-items:center;">
+        <button class="btn btn-primary" onclick="batchUpdateProgress()" id="btnBatchUpdate" disabled>📝 批量更新进展</button>
+        <button class="btn btn-danger btn-sm" onclick="confirmDeleteSelected()" id="btnDeleteSelected" disabled style="display:none;">🗑 删除选中</button>
+        <span id="batchStatus" style="font-size:12px;color:#888;"></span>
+        <span style="font-size:12px;color:#999;margin-left:auto;">修改任意字段自动勾选</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 设置 Modal ── -->
+<div class="modal-overlay" id="setupModal">
+  <div class="modal">
+    <h2>⚙️ 系统设置</h2>
+    <div class="form-row"><label>飞书 App ID</label><input type="text" id="cfgFeishuAppId" placeholder="cli_xxxxxxxxxxxxxx"></div>
+    <div class="form-row"><label>飞书 App Secret</label><input type="text" id="cfgFeishuSecret" placeholder=""></div>
+    <div class="form-row"><label>飞书 Bitable Token</label><input type="text" id="cfgAppToken" placeholder="OH03xxxxxxxxx"></div>
+    <div class="form-row"><label>飞书表 ID</label><input type="text" id="cfgTableId" placeholder="tblxxxxxxxxx"></div>
+    <hr style="margin:12px 0;border:none;border-top:1px solid #eee;">
+    <div class="form-row"><label>LLM API Key</label><input type="text" id="cfgLlmKey" placeholder="sk-xxxxxxxxxxxxx"></div>
+    <div class="form-row"><label>LLM 地址</label><input type="text" id="cfgLlmUrl" placeholder="https://api.deepseek.com" value="https://api.deepseek.com"></div>
+    <div class="form-row"><label>LLM 模型</label><input type="text" id="cfgLlmModel" placeholder="deepseek-chat" value="deepseek-chat"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="hideSetupModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveSetup()">💾 保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──
+let parsedRecords = [];
+let currentRecords = [];
+let config = {};
+let rowOriginals = {};  // idx -> {fieldName: originalValue}
+
+// ── 工具函数 ──
+function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
+
+async function safeJson(resp) {
+  if (!resp.ok) {
+    let text;
+    try { text = await resp.text(); } catch(e) { text = resp.statusText; }
+    throw new Error(`[${resp.status}] ${text.slice(0, 200)}`);
+  }
+  return resp.json();
+}
+
+function formatDate(val) {
+  if (!val && val !== 0) return '';
+  if (val === 0 || val === '0') return '';
+  let ts;
+  if (typeof val === 'number') {
+    ts = val;
+  } else if (typeof val === 'string') {
+    ts = parseInt(val, 10);
+    if (isNaN(ts)) return val;
+  } else {
+    return String(val);
+  }
+  if (ts < 1e12) ts *= 1000;
+  // 忽略无效时间戳（1970年附近或更早）
+  if (ts < 86400000) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime()) || d.getFullYear() < 2000) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function extractText(val) {
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number') return String(val);
+  if (val === true) return '是';
+  if (val === false) return '否';
+  if (Array.isArray(val) && val.length > 0 && typeof val[0] === 'object') {
+    return val.map(item => item.text || item.content || '').join('').trim();
+  }
+  return String(val || '');
+}
+
+function statusBadge(status) {
+  const cls = {
+    '待处理': 'status-todo', '处理中': 'status-progress',
+    '待验证': 'status-review', '已闭环': 'status-done',
+  }[status] || 'status-todo';
+  return `<span class="cell-status ${cls}">${esc(status)}</span>`;
+}
+
+function showAlert(id, msg, type) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.className = `alert alert-${type || 'info'} show`;
+}
+
+function hideAlert(id) {
+  const el = document.getElementById(id);
+  if (el) el.className = 'alert';
+}
+
+// ── Init ──
+async function init() {
+  // 设置站会日期默认为今天
+  const today = new Date();
+  const y = today.getFullYear();
+  const m = String(today.getMonth() + 1).padStart(2, '0');
+  const d = String(today.getDate()).padStart(2, '0');
+  const dateStr = `${y}-${m}-${d}`;
+  const dateInput = document.getElementById('meetingDate');
+  if (dateInput) dateInput.value = dateStr;
+  const trackDateInput = document.getElementById('trackDate');
+  if (trackDateInput) trackDateInput.value = dateStr;
+
+  try {
+    const resp = await fetch('/api/status');
+    const status = await safeJson(resp);
+    config = status;
+    const badge = document.getElementById('statusBadge');
+    if (status.configured) {
+      badge.textContent = '✅ 已配置';
+      badge.className = 'status-badge ok';
+      // 同步项目选项到下拉框
+      if (status.projects && status.projects.length) {
+        const sel = document.getElementById('trackProject');
+        status.projects.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p;
+          opt.textContent = p;
+          sel.appendChild(opt);
+        });
+      }
+    } else {
+      badge.textContent = '⚠️ 未配置';
+      badge.className = 'status-badge warn';
+    }
+  } catch (e) { console.error('Init failed:', e); }
+}
+init();
+
+/** 刷新项目下拉选项（从服务器实时拉取） */
+async function refreshProjectOptions() {
+  try {
+    const resp = await fetch('/api/status');
+    const status = await safeJson(resp);
+    config = status;
+    const sel = document.getElementById('trackProject');
+    // 清空旧选项（保留第一个"全部项目"）
+    while (sel.options.length > 1) sel.remove(1);
+    // 填入新选项
+    if (status.projects && status.projects.length) {
+      status.projects.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = p;
+        sel.appendChild(opt);
+      });
+    }
+  } catch (e) {
+    console.error('刷新项目选项失败:', e);
+  }
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.tab[data-tab="${name}"]`).classList.add('active');
+  document.getElementById(`tab-${name}`).classList.add('active');
+  if (name === 'track') {
+    updateFilterTags();
+    // 切到进度跟踪页时实时刷新项目选项
+    refreshProjectOptions().then(() => loadOpenRecords());
+  }
+}
+
+// ── Parse ──
+async function parseText() {
+  const text = document.getElementById('inputText').value.trim();
+  if (!text) { alert('请先粘贴晨会文本'); return; }
+  const project = document.getElementById('projectName').value.trim() || '默认项目';
+  const meetingDate = document.getElementById('meetingDate').value || '';
+  const btn = document.getElementById('btnParse');
+  btn.disabled = true; btn.innerHTML = '<span class="loading"></span> 解析并写入中...';
+  hideAlert('parseAlert');
+  try {
+    const resp = await fetch('/api/parse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, project, meeting_date: meetingDate }),
+    });
+    const result = await safeJson(resp);
+    console.log('API 返回:', JSON.stringify(result));
+    if (result.error) {
+      showAlert('parseAlert', `解析失败: ${result.error}`, 'error');
+      return;
+    }
+    const records = result.records || [];
+    if (!records.length) {
+      showAlert('parseAlert', '解析结果为空，请检查文本格式', 'warning');
+      return;
+    }
+    // 显示预览
+    parsedRecords = records;
+    renderPreview(parsedRecords);
+    document.getElementById('previewSection').style.display = 'block';
+    // 处理写入结果
+    const wr = result.write_result;
+    if (wr) {
+      document.getElementById('writeStatus').textContent = wr.message;
+      if (wr.fail_count === 0) {
+        showAlert('parseAlert', `✅ 解析 ${records.length} 条，${wr.message}`, 'success');
+        showSuccessModal('✅ 写入成功', `成功录入 ${wr.success_count} 条${wr.dedup_skipped?.length ? `，跳过 ${wr.dedup_skipped.length} 条重复` : ''}`);
+        // 写入成功后清空输入框和预览，防止重复操作
+        document.getElementById('inputText').value = '';
+        setTimeout(() => clearPreview(), 500);
+      } else {
+        const detail = wr.errors?.length ? `: ${wr.errors.join('; ')}` : '';
+        showAlert('parseAlert', `⚠️ ${wr.message}${detail}`, 'warning');
+      }
+    }
+  } catch (e) {
+    showAlert('parseAlert', `操作失败: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false; btn.innerHTML = '🔍 AI 解析并写入';
+  }
+}
+
+/** 一键解析并写入飞书 */
+function renderPreview(records) {
+  const tbody = document.querySelector('#previewTable tbody');
+  tbody.innerHTML = '';
+  document.getElementById('recordCount').textContent = `${records.length} 条`;
+  records.forEach((r, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td style="text-align:center;font-weight:600;color:#666;">${r['序号'] || (idx + 1)}</td>
+      <td><span class="badge" style="background:#e3f2fd;color:#1565c0;">${esc(r['站会环节'] || '')}</span></td>
+      <td class="cell-title">${esc(r['事项标题'] || '')}</td>
+      <td>${esc((r['子项描述'] || '').substring(0, 80))}</td>
+      <td><span class="badge" style="background:#e8eaf6;color:#283593;">${esc(r['分类'] || '')}</span></td>
+      <td class="priority-${r['优先级'] || 'P2'}">${esc(r['优先级'] || '')}</td>
+      <td>${esc(r['负责人'] || '')}</td>
+      <td>${statusBadge(r['当前状态'] || '')}</td>
+      <td>${formatDate(r['截止日期'])}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function clearPreview() {
+  document.getElementById('previewSection').style.display = 'none';
+  parsedRecords = [];
+}
+
+// ── Track ──
+function updateFilterTags() {
+  const tags = document.getElementById('filterTags');
+  tags.innerHTML = '';
+  const project = document.getElementById('trackProject').value;
+  const date = document.getElementById('trackDate').value;
+  const status = document.getElementById('trackStatus').value;
+  const keyword = document.getElementById('trackKeyword').value.trim();
+  if (project) tags.innerHTML += `<span style="background:#e3f2fd;color:#1565c0;padding:2px 8px;border-radius:10px;font-size:11px;">项目: ${esc(project)}</span>`;
+  if (date) tags.innerHTML += `<span style="background:#e3f2fd;color:#1565c0;padding:2px 8px;border-radius:10px;font-size:11px;">日期: ${esc(date)}</span>`;
+  if (status) tags.innerHTML += `<span style="background:#e3f2fd;color:#1565c0;padding:2px 8px;border-radius:10px;font-size:11px;">状态: ${esc(status)}</span>`;
+  if (keyword) tags.innerHTML += `<span style="background:#fce4ec;color:#c62828;padding:2px 8px;border-radius:10px;font-size:11px;">搜索: ${esc(keyword)}</span>`;
+  if (!project && !date && !status && !keyword) tags.innerHTML = '<span style="font-size:11px;color:#bbb;">无筛选条件</span>';
+}
+
+async function loadOpenRecords() {
+  const project = document.getElementById('trackProject').value;
+  const date = document.getElementById('trackDate').value || '';
+  const status = document.getElementById('trackStatus').value || '';
+  const keyword = document.getElementById('trackKeyword').value.trim() || '';
+  updateFilterTags();
+  const btn = document.querySelector('.tab-content.active .btn-primary');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="loading"></span> 查询中...'; }
+  hideAlert('trackAlert');
+  try {
+    const resp = await fetch('/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project, date, status, keyword }),
+    });
+    const result = await safeJson(resp);
+    currentRecords = result.records || [];
+    renderTrackTable();
+  } catch (e) {
+    showAlert('trackAlert', `查询失败: ${e.message}`, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '🔍 查询'; }
+  }
+  // 统计独立加载，按当前项目+日期（不受状态筛选影响）
+  loadStats(project, date);
+}
+
+function clearFilters() {
+  document.getElementById('trackProject').value = '';
+  document.getElementById('trackDate').value = '';
+  document.getElementById('trackStatus').value = '';
+  document.getElementById('trackKeyword').value = '';
+  updateFilterTags();
+  loadOpenRecords();
+}
+
+function onFieldChange(idx) {
+  const checkbox = document.querySelector(`.row-check[data-idx="${idx}"]`);
+  if (!checkbox) return;
+  const orig = rowOriginals[idx];
+  if (!orig) return;
+  // 检测是否有实际变化
+  let isDirty = false;
+  const inputs = document.querySelectorAll(`.inline-edit[data-idx="${idx}"]`);
+  inputs.forEach(inp => {
+    if (inp.value.trim() !== (orig[inp.dataset.field] || '')) isDirty = true;
+  });
+  const statusEl = document.querySelector(`.status-select[data-idx="${idx}"]`);
+  if (statusEl && statusEl.value !== (orig['当前状态'] || '')) isDirty = true;
+  checkbox.checked = isDirty;
+  updateBatchBtn();
+}
+
+function renderTrackTable() {
+  const tbody = document.querySelector('#trackTable tbody');
+  tbody.innerHTML = '';
+  document.getElementById('trackEmpty').style.display = currentRecords.length ? 'none' : 'block';
+  document.getElementById('statsBar').style.display = currentRecords.length ? 'flex' : 'none';
+  document.getElementById('btnBatchUpdate').disabled = true;
+  document.getElementById('selectedCount').textContent = '';
+  document.getElementById('selectAll').checked = false;
+
+  let overdue = 0, inProgress = 0;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  currentRecords.forEach((r, idx) => {
+    // 保存原始值用于脏检测
+    rowOriginals[idx] = {
+      '今日进展': extractText(r['今日进展'] || ''),
+      '下一步计划': extractText(r['下一步计划'] || ''),
+      '风险阻塞': extractText(r['风险阻塞'] || ''),
+      '当前状态': r['当前状态'] || '',
+    };
+    const dueStr = extractText(r['截止日期']);
+    const dueDisplay = formatDate(r['截止日期']);
+    const statusRaw = r['当前状态'] || '';
+    const statusKey = statusRaw.trim();
+    let isOverdue = false;
+
+    // 有截止日期（有效日期）且未闭环才判断超期
+    if (dueDisplay && statusKey !== '已闭环') {
+      const due = new Date(dueDisplay);
+      if (!isNaN(due) && due < today) isOverdue = true;
+    }
+    if (isOverdue) overdue++;
+    if (statusKey === '处理中') inProgress++;
+
+    const tr = document.createElement('tr');
+    tr.id = `track-row-${idx}`;
+    tr.dataset.recordId = r.record_id;
+    tr.innerHTML = `
+      <td><input type="checkbox" class="row-check" data-idx="${idx}" onchange="updateBatchBtn()"></td>
+      <td style="text-align:center;font-weight:600;color:#666;font-size:12px;">${idx + 1}</td>
+      <td>
+        <div class="cell-title">${esc(extractText(r['每日站会闭环管理'] || r['事项标题'] || ''))}</div>
+        <div style="font-size:11px;color:#888;">${esc((extractText(r['子项描述'] || '')).substring(0, 50))}</div>
+      </td>
+      <td>${esc(extractText(r['负责人'] || ''))}</td>
+      <td>
+        <select class="inline-edit status-select" data-idx="${idx}" data-field="当前状态"
+                onchange="onFieldChange(${idx})">
+          <option value="">--</option>
+          <option value="待处理" ${statusKey==='待处理'?'selected':''}>待处理</option>
+          <option value="处理中" ${statusKey==='处理中'?'selected':''}>处理中</option>
+          <option value="待验证" ${statusKey==='待验证'?'selected':''}>待验证</option>
+          <option value="已闭环" ${statusKey==='已闭环'?'selected':''}>已闭环</option>
+        </select>
+        ${isOverdue ? '<span class="cell-status status-overdue" style="margin-left:4px;">超期</span>' : ''}
+      </td>
+      <td>
+        <textarea class="inline-edit textarea-cell" data-idx="${idx}" data-field="今日进展"
+               rows="2" placeholder="今日进展..."
+               oninput="onFieldChange(${idx})">${esc(extractText(r['今日进展'] || ''))}</textarea>
+      </td>
+      <td>
+        <textarea class="inline-edit textarea-cell" data-idx="${idx}" data-field="下一步计划"
+               rows="2" placeholder="下一步计划..."
+               oninput="onFieldChange(${idx})">${esc(extractText(r['下一步计划'] || ''))}</textarea>
+      </td>
+      <td>
+        <textarea class="inline-edit textarea-cell" data-idx="${idx}" data-field="风险阻塞"
+               rows="2" placeholder="风险阻塞..."
+               oninput="onFieldChange(${idx})">${esc(extractText(r['风险阻塞'] || ''))}</textarea>
+      </td>
+      <td style="color:${isOverdue ? '#c62828' : '#666'};white-space:nowrap;font-size:12px;">
+        ${dueDisplay || '-'}
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  updateDeleteBtns();
+}
+
+/** 加载全局统计（不受筛选条件影响） */
+async function loadStats(project, meetingDate) {
+  try {
+    const resp = await fetch('/api/stats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project: project || '',
+        meeting_date: meetingDate || '',
+      }),
+    });
+    const result = await safeJson(resp);
+    document.getElementById('statAll').textContent = result.total || 0;
+    document.getElementById('statTotal').textContent = result.todo || 0;
+    document.getElementById('statInProgress').textContent = result.in_progress || 0;
+    document.getElementById('statClosed').textContent = result.closed || 0;
+    // 已超期作为子标签嵌入状态标签内
+    const ot = result.overdue_in_todo || 0;
+    const oi = result.overdue_in_progress || 0;
+    document.getElementById('overdueInTodo').textContent = ot ? `${ot} 已超期` : '';
+    document.getElementById('overdueInProgress').textContent = oi ? `${oi} 已超期` : '';
+    document.getElementById('statsBar').style.display = 'flex';
+  } catch (e) {
+    console.error('统计加载失败:', e);
+  }
+}
+
+function updateBatchBtn() {
+  const checked = document.querySelectorAll('.row-check:checked');
+  const btn = document.getElementById('btnBatchUpdate');
+  btn.disabled = checked.length === 0;
+  document.getElementById('selectedCount').textContent = checked.length ? `已选 ${checked.length} 条` : '';
+  updateDeleteBtns();
+}
+
+function toggleAll() {
+  const checked = document.getElementById('selectAll').checked;
+  document.querySelectorAll('.row-check').forEach(c => c.checked = checked);
+  updateBatchBtn();
+}
+
+async function batchUpdateProgress() {
+  const checked = document.querySelectorAll('.row-check:checked');
+  if (!checked.length) return;
+  const btn = document.getElementById('btnBatchUpdate');
+  btn.disabled = true; btn.innerHTML = '<span class="loading"></span> 更新中...';
+  document.getElementById('batchStatus').textContent = '';
+  hideAlert('trackAlert');
+
+  const updates = [];
+  checked.forEach(c => {
+    const idx = parseInt(c.dataset.idx);
+    const record = currentRecords[idx];
+    const orig = rowOriginals[idx] || {};
+    const fields = {};
+    let isDirty = false;
+
+    document.querySelectorAll(`.inline-edit[data-idx="${idx}"]`).forEach(input => {
+      const val = input.value.trim();
+      const fname = input.dataset.field;
+      if (val) fields[fname] = val;
+      // 脏检测：与原始值比较
+      if (val !== (orig[fname] || '')) isDirty = true;
+    });
+
+    // 状态 select 单独检测
+    const statusEl = document.querySelector(`.status-select[data-idx="${idx}"]`);
+    if (statusEl) {
+      const stVal = statusEl.value;
+      if (stVal) fields['当前状态'] = stVal;
+      if (stVal !== (orig['当前状态'] || '')) isDirty = true;
+    }
+
+    // 无变化则跳过
+    if (!isDirty) return;
+
+    // 自动推进状态逻辑
+    if (!fields['当前状态'] && (fields['今日进展'] || fields['下一步计划'])) {
+      fields['当前状态'] = '处理中';
+    }
+    if (fields['当前状态'] === '已闭环') {
+      fields['是否闭环'] = true;
+      if (!fields['闭环说明']) fields['闭环说明'] = '已处理完成';
+    }
+    fields.record_id = record.record_id;
+    updates.push(fields);
+  });
+
+  if (!updates.length) {
+    showAlert('trackAlert', '⚠️ 未检测到变化，无需更新', 'warning');
+    btn.disabled = false; btn.innerHTML = '📝 批量更新进展';
+    return;
+  }
+
+  try {
+    const resp = await fetch('/api/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates }),
+    });
+    const result = await safeJson(resp);
+    document.getElementById('batchStatus').textContent = result.message;
+    if (result.ok) {
+      showAlert('trackAlert', `✅ ${result.message}`, 'success');
+      btn.disabled = false; btn.innerHTML = '📝 批量更新进展';
+      setTimeout(loadOpenRecords, 800);
+    } else {
+      showAlert('trackAlert', `⚠️ ${result.message}`, 'warning');
+      btn.disabled = false; btn.innerHTML = '📝 批量更新进展';
+    }
+  } catch (e) {
+    showAlert('trackAlert', `更新失败: ${e.message}`, 'error');
+    btn.disabled = false; btn.innerHTML = '📝 批量更新进展';
+  }
+}
+
+
+// ── Setup ──
+function showSetupModal() {
+  document.getElementById('setupModal').classList.add('show');
+}
+function hideSetupModal() {
+  document.getElementById('setupModal').classList.remove('show');
+}
+async function saveSetup() {
+  const body = {
+    feishu_app_id: document.getElementById('cfgFeishuAppId').value,
+    feishu_app_secret: document.getElementById('cfgFeishuSecret').value,
+    feishu_app_token: document.getElementById('cfgAppToken').value,
+    feishu_table_id: document.getElementById('cfgTableId').value,
+    llm_api_key: document.getElementById('cfgLlmKey').value,
+    llm_base_url: document.getElementById('cfgLlmUrl').value,
+    llm_model: document.getElementById('cfgLlmModel').value,
+  };
+  try {
+    const resp = await fetch('/api/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const result = await safeJson(resp);
+    if (result.ok) {
+      hideSetupModal();
+      await init();
+      alert('配置已保存');
+    }
+  } catch (e) { alert('保存失败: ' + e.message); }
+}
+
+// ── 删除功能 ──
+let pendingDeleteIds = [];
+
+function updateDeleteBtns() {
+  const checked = document.querySelectorAll('.row-check:checked');
+  const delSelected = document.getElementById('btnDeleteSelected');
+  delSelected.style.display = checked.length ? 'inline-block' : 'none';
+  if (checked.length) delSelected.textContent = `🗑 删除选中 (${checked.length})`;
+
+  const date = document.getElementById('trackDate').value;
+  const delByDate = document.getElementById('btnDeleteByDate');
+  if (date && currentRecords.length) {
+    delByDate.style.display = 'inline-block';
+    delByDate.textContent = `🗑 删除 ${date} 全部记录 (${currentRecords.length})`;
+  } else {
+    delByDate.style.display = 'none';
+  }
+}
+
+function confirmDeleteSelected() {
+  const checked = document.querySelectorAll('.row-check:checked');
+  if (!checked.length) return;
+  pendingDeleteIds = [];
+  const titles = [];
+  checked.forEach(cb => {
+    const idx = parseInt(cb.dataset.idx);
+    const r = currentRecords[idx];
+    if (r && r.record_id) {
+      pendingDeleteIds.push(r.record_id);
+      titles.push(extractText(r['每日站会闭环管理'] || r['事项标题'] || '') || '无标题');
+    }
+  });
+  document.getElementById('deleteModalMsg').textContent =
+    `确定删除以下 ${pendingDeleteIds.length} 条记录吗？\n${titles.map(t => `· ${t}`).join('\n')}`;
+  document.getElementById('deleteModal').classList.add('show');
+}
+
+function confirmDeleteAllByDate() {
+  const date = document.getElementById('trackDate').value;
+  if (!date || !currentRecords.length) return;
+  pendingDeleteIds = currentRecords.map(r => r.record_id).filter(Boolean);
+  document.getElementById('deleteModalMsg').textContent =
+    `确定删除 ${date} 的全部 ${pendingDeleteIds.length} 条记录吗？此操作不可撤销！`;
+  document.getElementById('deleteModal').classList.add('show');
+}
+
+async function executeDelete() {
+  if (!pendingDeleteIds.length) return;
+  document.getElementById('btnConfirmDelete').disabled = true;
+  document.getElementById('btnConfirmDelete').innerHTML = '<span class="loading"></span> 删除中...';
+  hideAlert('trackAlert');
+  try {
+    const resp = await fetch('/api/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ record_ids: pendingDeleteIds }),
+    });
+    const result = await safeJson(resp);
+    hideDeleteModal();
+    showAlert('trackAlert',
+      result.ok
+        ? `✅ ${result.message}`
+        : `⚠️ ${result.message}${result.errors?.length ? '：' + result.errors.join('; ') : ''}`,
+      result.ok ? 'success' : 'warning');
+    if (result.success_count > 0) await loadOpenRecords();
+  } catch (e) {
+    hideDeleteModal();
+    showAlert('trackAlert', `❌ 删除失败: ${e.message}`, 'error');
+  }
+}
+
+function hideDeleteModal() {
+  document.getElementById('deleteModal').classList.remove('show');
+  document.getElementById('btnConfirmDelete').disabled = false;
+  document.getElementById('btnConfirmDelete').textContent = '🗑 确认删除';
+  pendingDeleteIds = [];
+}
+
+/** 写入成功弹窗 */
+function showSuccessModal(title, msg) {
+  const el = document.getElementById('successModalTitle');
+  const elMsg = document.getElementById('successModalMsg');
+  const overlay = document.getElementById('successModal');
+  if (el && elMsg && overlay) {
+    el.textContent = title;
+    elMsg.textContent = msg;
+    overlay.classList.add('show');
+  }
+}
+function hideSuccessModal() {
+  document.getElementById('successModal').classList.remove('show');
+}
+</script>
+
+<div class="modal-overlay" id="deleteModal">
+  <div class="modal" style="max-width:400px;">
+    <h2>⚠️ 确认删除</h2>
+    <p id="deleteModalMsg" style="margin:12px 0;color:#555;font-size:14px;line-height:1.6;"></p>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="hideDeleteModal()">取消</button>
+      <button class="btn btn-danger" onclick="executeDelete()" id="btnConfirmDelete">🗑 确认删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- 写入成功弹窗 -->
+<div class="modal-overlay" id="successModal">
+  <div class="modal" style="max-width:380px;text-align:center;">
+    <div style="font-size:48px;margin-bottom:12px;">✅</div>
+    <h2 id="successModalTitle" style="font-size:18px;margin-bottom:8px;">写入成功</h2>
+    <p id="successModalMsg" style="color:#666;font-size:14px;margin-bottom:20px;"></p>
+    <div class="modal-actions" style="justify-content:center;">
+      <button class="btn btn-primary" onclick="hideSuccessModal()" style="min-width:100px;">知道了</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
