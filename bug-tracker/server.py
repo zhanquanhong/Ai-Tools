@@ -7,8 +7,8 @@ bug-tracker 共享服务器（含登录认证）
 - 版本管理：启动自动备份（保留 7 天）、管理员一键回滚（二次确认）、更新日志 API
 
 认证配置（auth.json，与 server.py 同目录）：
-  {"user": "admin", "pass": "你的密码"}
-未配置时默认 admin / admin123（请务必修改！）
+  {"accounts": {"用户名": {"pass": "密码", "role": "admin|user"}}}
+未配置 auth.json 时服务拒绝登录（无任何默认账号），请先创建该文件。
 
 启动：python3 server.py [port]   （默认 8092）
 """
