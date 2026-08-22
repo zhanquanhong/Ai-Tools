@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>BUG 处理进展跟踪</title>
+<link rel="stylesheet" href="css/style.css?v=1340">
+</head>
+<body>
+<div class="app">
+
+  <!-- 顶栏 -->
+  <header class="topbar">
+    <div class="logo">
+      <div class="logo-badge">🐞</div>
+      <div>
+        <h1>BUG 处理进展跟踪</h1>
+        <div class="sub">每日快照 · 新增 / 解决 / 责任人追踪</div>
+      </div>
+    </div>
+    <div class="top-right">
+      <span class="user-tag" id="userTag" title="点击切换账号" style="display:none">👤</span>
+      <span class="sync-badge local" id="syncBadge" title="数据同步状态">💻 同步中…</span>
+      <span class="last-import" id="lastImportInfo">尚未导入数据</span>
+      <span class="version-tag" id="versionTag" title="查看更新日志">v1.0.0</span>
+    </div>
+  </header>
+
+  <!-- 导航 -->
+  <nav class="nav" id="nav">
+    <div class="nav-item" data-view="import">📥 导入 BUG</div>
+    <div class="nav-item active" data-view="dashboard">📊 每日看板</div>
+    <div class="nav-item" data-view="list">📋 BUG 列表 <span class="cnt" id="navListCnt">0</span></div>
+    <div class="nav-item" data-view="people">👥 人员管理 <span class="cnt" id="navPeopleCnt">0</span></div>
+    <div class="nav-item" data-view="loginrecords">🛡️ 登录记录</div>
+    <div class="nav-item" data-view="versions" style="display:none">📦 版本管理</div>
+  </nav>
+
+  <!-- 全局提示 -->
+  <div id="globalAlert" class="global-alert hidden"></div>
+
+  <!-- ============ 视图：导入 ============ -->
+  <section class="view" id="view-import" style="display:none">
+    <div class="panel">
+      <h3>📥 导入 BUG 列表 <span class="hint">支持 .xlsx / .xls / .csv（自动识别编码与列名）</span></h3>
+      <div class="dropzone" id="dropzone">
+        <div class="big">⬆️</div>
+        <div><b>拖拽文件到这里</b> 或 <span class="btn-link" id="pickFile">点击选择文件</span></div>
+        <div class="dz-sub">每次导入 = 一次快照，自动对比上次：新增 / 解决 / 重新激活 / 责任人变更</div>
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display:none">
+      </div>
+
+      <div id="importPreview" class="hidden">
+        <div class="panel-inner">
+          <h4>字段映射确认 <span class="hint" id="fileMeta"></span></h4>
+          <table class="map-table" id="mapTable"></table>
+          <div class="preview-actions">
+            <button class="btn btn-primary" id="btnConfirmImport">✅ 确认导入</button>
+            <button class="btn btn-plain" id="btnCancelImport">取消</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="importResult" class="hidden"></div>
+    </div>
+
+    <div class="panel">
+      <h3>💾 数据备份 <span class="hint">数据存于浏览器本地，请定期备份</span></h3>
+      <div class="backup-row">
+        <button class="btn btn-primary" id="btnExportBackup">导出完整备份 (.xlsx)</button>
+        <button class="btn" id="btnImportBackup">从备份恢复</button>
+        <input type="file" id="backupInput" accept=".xlsx,.xls,.csv" style="display:none">
+        <button class="btn btn-plain" id="btnExportCsv">导出当前列表 (.csv)</button>
+        <button class="btn btn-danger" id="btnClearData">🗑️ 数据清零</button>
+      </div>
+      <div class="backup-tip">完整备份包含：BUG 列表（含系统字段）/ 责任人变更历史 / 人员名单 / 每日快照记录。恢复会覆盖当前数据（自动先备份当前数据）。</div>
+      <div class="backup-tip" style="color:#b33a3a">数据清零：清空全部 BUG 记录 / 变更历史 / 快照记录（保留人员名单与原始负责人名单），清空前自动导出备份。</div>
+    </div>
+  </section>
+
+  <!-- ============ 视图：看板 ============ -->
+  <section class="view" id="view-dashboard">
+    <div id="noImportBanner" class="no-import hidden">⚠️ 尚未导入任何 BUG 列表，请先到「导入 BUG」上传数据。</div>
+    <div id="staleBanner" class="no-import hidden"></div>
+
+    <div class="version-filter-bar">
+      <span class="vfb-label">📦 版本筛选：</span>
+      <div class="vfb-multisel" id="verMultiWrap">
+        <button class="vfb-btn" id="btnVerMulti">全部版本 ▾</button>
+        <div class="vfb-pop hidden" id="verMultiPop">
+          <div class="vfb-pop-list" id="verMultiList"></div>
+          <div class="vfb-pop-actions">
+            <button class="btn btn-plain btn-sm" id="btnVerClear">清空</button>
+            <button class="btn btn-primary btn-sm" id="btnVerApply">确定</button>
+          </div>
+        </div>
+      </div>
+      <span class="vfb-hint">支持多选版本，统计卡 / 严重程度 / 趋势 / 责任人维度 均按所选版本展示</span>
+      <button class="btn btn-sm" id="btnStatsModal" style="margin-left:auto">📊 问题统计</button>
+      <button class="btn btn-primary btn-sm" id="btnExportBugList">📤 导出问题清单</button>
+    </div>
+
+    <div class="cards" id="statCards"></div>
+
+    <div class="stats-grid">
+      <div class="panel">
+        <h3>📦 按发现发布统计 <span class="tools"><span id="verTotal"></span> <span id="btnShowAllVers" class="all-vers-link" title="恢复全部版本数据">🔄 全部版本</span></span></h3>
+        <div class="stat-list" id="verStats"></div>
+      </div>
+      <div class="panel">
+        <h3>⚠️ 按严重程度统计 <span class="tools" id="sevTotal"></span></h3>
+        <div class="stat-list" id="sevStats"></div>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="main-left">
+        <div class="panel">
+          <h3>新增 / 解决趋势
+            <span class="trend-controls">
+              <select id="trendDays">
+                <option value="7">近 7 天</option>
+                <option value="14">近 14 天</option>
+                <option value="30">近 30 天</option>
+                <option value="60">近 60 天</option>
+                <option value="90">近 90 天</option>
+              </select>
+            </span>
+          </h3>
+          <div id="trendChart" class="chart"></div>
+        </div>
+        <div class="panel">
+          <h3>📅 按月统计（建单）
+            <span class="tools"><span id="abnormalTag" class="abnormal-tag hidden" title="点击查看编号异常明细">⚠️ <span id="abnormalCount">0</span> 条编号异常</span></span>
+            <span class="trend-controls">
+              <select id="monthFilter" title="按建单月份筛选（编号日期归月）">
+                <option value="all">全部月份</option>
+              </select>
+            </span>
+          </h3>
+          <div id="monthChart" class="chart"></div>
+          <div id="monthSummary" class="month-summary"></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>责任人维度 <span class="tools" id="ownerTotal"></span></h3>
+        <div id="ownerStats"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 视图：BUG 列表 ============ -->
+  <section class="view" id="view-list" style="display:none">
+    <div class="panel">
+      <div class="list-toolbar">
+        <div class="list-search">
+          <input type="text" id="quickSearch" placeholder="🔍 快速搜索 编号/标题/描述…">
+        </div>
+        <div class="list-tools">
+          <span class="filter-info" id="filterInfo">共 <b>0</b> 条</span>
+          <button class="btn btn-plain btn-sm" id="btnTodayNew" title="只看今天首次发现的 BUG（与看板「今日新增」卡片口径一致）">🆕 今日新增</button>
+          <button class="btn btn-plain btn-sm" id="btnCopyIds" title="复制当前列表全部编号（每行一个）">📋 复制编号</button>
+          <button class="btn btn-plain btn-sm" id="btnExportVerOwner" title="按人员/版本维度导出（版本-姓名（条数）+ 编号）">📤 导出清单</button>
+          <button class="btn btn-plain btn-sm" id="btnClearFilters" title="清除全部筛选">清除筛选</button>
+          <button class="btn btn-plain btn-sm" id="btnExportFiltered">导出当前结果 (.csv)</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="bugTable">
+          <colgroup id="bugColgroup"></colgroup>
+          <thead id="bugThead"></thead>
+          <tbody id="bugTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 视图：人员管理 ============ -->
+  <section class="view" id="view-people" style="display:none">
+    <div class="panel">
+      <h3>👥 人员名单 <span class="hint">删除人员前需先改派其名下未解决 BUG</span></h3>
+      <div class="people-add">
+        <input type="text" id="newPersonName" placeholder="输入人员姓名">
+        <button class="btn btn-primary" id="btnAddPerson">新增人员</button>
+      </div>
+      <div class="whitelist-box">
+        <h3>🛡️ 原始负责人白名单 <span class="hint">导入保护规则适用对象</span></h3>
+        <div class="wl-rule">保护规则：导入负责人为白名单成员，且与系统当前责任人不同时，<b>不更新责任人</b>（其他字段照常更新）。已分配出去的 BUG 重新导入原始名单不会覆盖已分配责任人。</div>
+        <div class="wl-add">
+          <input type="text" id="wlInput" placeholder="输入姓名添加到白名单，回车确认">
+          <button class="btn btn-primary" id="btnAddWhitelist">添加</button>
+        </div>
+        <div class="wl-tags" id="whitelistTags"></div>
+        <div class="wl-foot">
+          <span class="count" id="whitelistCount">共 0 人</span>
+          <span class="reset" id="btnResetWhitelist">↺ 恢复默认名单</span>
+        </div>
+      </div>
+      <table class="data-table" id="peopleTable">
+        <thead><tr><th>姓名</th><th>名下未解决</th><th>名下超期</th><th>操作</th></tr></thead>
+        <tbody id="peopleTbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 视图：登录记录 ============ -->
+  <section class="view" id="view-loginrecords" style="display:none">
+    <div class="panel">
+      <h3>🛡️ 登录记录 <span class="hint">记录每次登录的 IP / 设备 / 浏览器 / 账号 / 结果（最多保留 5000 条）</span></h3>
+      <div class="list-toolbar">
+        <div class="list-search">
+          <input type="text" id="loginSearch" placeholder="🔍 搜索 IP / 账号 / 设备…">
+        </div>
+        <div class="list-tools">
+          <span class="filter-info" id="loginInfo">共 <b>0</b> 条</span>
+          <button class="btn btn-plain btn-sm" id="btnRefreshLogin">刷新</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="loginTable">
+          <thead><tr>
+            <th>时间</th><th>IP 地址</th><th>设备</th><th>浏览器</th><th>账号</th><th>结果</th><th>User-Agent</th>
+          </tr></thead>
+          <tbody id="loginTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 视图：版本管理（仅管理员可见） ============ -->
+  <section class="view" id="view-versions" style="display:none">
+    <div class="panel">
+      <h3>📦 版本管理 <span class="hint">自动备份最近 7 天 · 管理员一键回滚（二次确认）</span></h3>
+      <div id="backupList"></div>
+    </div>
+  </section>
+
+  <div class="footer">BUG 处理进展跟踪工具 · 数据仅存于本机浏览器 · <span id="footerVersion">v1.19.1</span></div>
+</div>
+
+<!-- ============ 模态框：更新日志 ============ -->
+<div class="modal-mask hidden" id="changelogModal">
+  <div class="modal">
+    <div class="modal-head"><h3>📜 更新日志</h3><span class="modal-close" data-close="changelogModal">✕</span></div>
+    <div class="modal-body" id="changelogBody"></div>
+  </div>
+</div>
+
+<!-- ============ 模态框：编号异常明细（v1.40.0） ============ -->
+<div class="modal-mask hidden" id="abnormalModal">
+  <div class="modal">
+    <div class="modal-head"><h3>⚠️ 编号异常明细</h3><span class="modal-close" data-close="abnormalModal">✕</span></div>
+    <div class="modal-body" id="abnormalBody"></div>
+  </div>
+</div>
+
+<!-- ============ 模态框：回滚二次确认（仅管理员） ============ -->
+<div class="modal-mask hidden" id="rollbackModal">
+  <div class="modal modal-sm">
+    <div class="modal-head"><h3>⚠️ 确认回滚</h3><span class="modal-close" data-close="rollbackModal">✕</span></div>
+    <div class="modal-body">
+      <div class="restore-summary" id="rollbackTarget" style="margin-bottom:10px"></div>
+      <div style="font-size:12px;color:#c0392b;background:#fdf0ef;border:1px solid #f5c6c2;border-radius:6px;padding:8px 10px;line-height:1.7">
+        回滚将把系统代码恢复到此备份版本（不影响 BUG 数据）。<br>
+        回滚前会自动备份当前版本，可再次回退。<br>
+        <b>服务端代码需重启服务后完全生效。</b>
+      </div>
+      <div id="rollbackStatus" style="font-size:12px;margin:10px 0;color:#484848"></div>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="btnRollbackOk">确认回滚</button>
+        <button class="btn btn-plain" id="btnRollbackCancel">取消</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 模态框：改派 ============ -->
+<div class="modal-mask hidden" id="reassignModal">
+  <div class="modal modal-sm">
+    <div class="modal-head"><h3>🔄 改派责任人</h3><span class="modal-close" data-close="reassignModal">✕</span></div>
+    <div class="modal-body">
+      <div class="form-row"><label>BUG 编号</label><div id="reassignId" class="form-static"></div></div>
+      <div class="form-row"><label>当前责任人</label><div id="reassignCur" class="form-static"></div></div>
+      <div class="form-row"><label>改派给</label>
+        <input type="text" id="reassignSearch" class="form-search" placeholder="🔍 输入姓名快速查找…">
+        <select id="reassignTarget" size="6"></select>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="btnReassignOk">确认改派</button>
+        <button class="btn btn-plain" data-close="reassignModal">取消</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 模态框：变更历史 ============ -->
+<div class="modal-mask hidden" id="historyModal">
+  <div class="modal">
+    <div class="modal-head"><h3>🕘 责任人变更历史</h3><span class="modal-close" data-close="historyModal">✕</span></div>
+    <div class="modal-body" id="historyBody"></div>
+  </div>
+</div>
+
+<!-- ============ 模态框：恢复备份确认 ============ -->
+<div class="modal-mask hidden" id="restoreModal">
+  <div class="modal modal-sm">
+    <div class="modal-head"><h3>⚠️ 确认恢复备份</h3><span class="modal-close" data-close="restoreModal">✕</span></div>
+    <div class="modal-body">
+      <div id="restoreSummary" class="restore-summary"></div>
+      <div class="restore-warn">恢复将<strong>覆盖当前全部数据</strong>。恢复前系统会自动备份当前数据（下载 .xlsx 文件），请妥善保存。</div>
+      <div class="form-actions">
+        <button class="btn btn-danger" id="btnRestoreOk">确认恢复</button>
+        <button class="btn btn-plain" data-close="restoreModal">取消</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 模态框：数据清零确认 ============ -->
+<div class="modal-mask hidden" id="clearModal">
+  <div class="modal modal-sm">
+    <div class="modal-head"><h3>🗑️ 确认数据清零</h3><span class="modal-close" data-close="clearModal">✕</span></div>
+    <div class="modal-body">
+      <div id="clearSummary" class="restore-summary"></div>
+      <div class="restore-warn">此操作将<strong>永久删除</strong>以上全部业务数据，无法撤销。清空前系统会自动导出备份（.xlsx 文件），请妥善保存。</div>
+      <div style="margin:12px 0 4px;font-size:12px;color:#484848">请输入 <b style="color:#e85418">确认</b> 后点击「确认清零」：</div>
+      <input type="text" id="clearConfirmInput" placeholder="输入：确认" autocomplete="off" style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;box-sizing:border-box;outline:none">
+      <div class="form-actions">
+        <button class="btn btn-danger" id="btnClearOk" disabled>确认清零</button>
+        <button class="btn btn-plain" data-close="clearModal">取消</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 模态框：备注 ============ -->
+<div class="modal-mask hidden" id="noteModal">
+  <div class="modal modal-sm">
+    <div class="modal-head"><h3>💬 BUG 备注</h3><span class="modal-close" data-close="noteModal">✕</span></div>
+    <div class="modal-body">
+      <div class="form-row"><label>BUG 编号</label><div id="noteId" class="form-static"></div></div>
+      <div class="form-row"><label>标题</label><div id="noteTitle" class="form-static note-title-full"></div></div>
+      <div class="form-row"><label>备注说明（处理进展，导入不覆盖）</label>
+        <textarea id="noteText" rows="4" placeholder="填写该 BUG 的最新处理进展说明…"></textarea>
+      </div>
+      <div id="noteMeta" class="note-meta"></div>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="btnNoteOk">保存备注</button>
+        <button class="btn btn-plain" data-close="noteModal">取消</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 模态框：BUG 详情（双击行） ============ -->
+<div class="modal-mask hidden" id="detailModal">
+  <div class="modal modal-lg">
+    <div class="modal-head"><h3>🐞 BUG 详细信息 <span class="dt-modal-ver" id="dtModalVer"></span><span class="dt-modal-id" id="dtModalId" title="点击复制编号"></span></h3><span class="modal-close" data-close="detailModal">✕</span></div>
+    <div class="detail-head">
+      <div class="detail-title" id="dtTitle"></div>
+    </div>
+    <div class="modal-body">
+      <div class="detail-grid" id="dtGrid"></div>
+      <div class="detail-section">
+        <div class="detail-sec-title">💬 备注</div>
+        <div id="dtNote"></div>
+      </div>
+    </div>
+    <div class="detail-actions">
+      <button class="btn btn-primary btn-sm" id="dtBtnReassign">⇄ 改派</button>
+      <button class="btn btn-sm" id="dtBtnNote">💬 备注</button>
+      <button class="btn btn-sm" id="dtBtnHistory">🕘 历史</button>
+      <button class="btn btn-danger btn-sm" id="dtBtnDelete">🗑 删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 模态框：通用确认（替代原生 confirm，兼容内嵌浏览器） ============ -->
+<div class="modal-mask hidden" id="confirmModal">
+  <div class="modal modal-sm">
+    <div class="modal-head"><h3>⚠️ 确认操作</h3><span class="modal-close" data-close="confirmModal">✕</span></div>
+    <div class="modal-body">
+      <div id="confirmMsg" style="font-size:13px;color:#1f2329;line-height:1.7"></div>
+      <div class="form-actions">
+        <button class="btn btn-plain" id="btnConfirmCancel">取消</button>
+        <button class="btn btn-primary" id="btnConfirmOk">确定</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 模态框：问题统计 ============ -->
+<div class="modal-mask hidden" id="statsModal">
+  <div class="modal modal-lg">
+    <div class="modal-head"><h3>📊 问题统计</h3><span class="modal-close" data-close="statsModal">✕</span></div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:#787878;margin-bottom:8px">按看板所选版本统计（未选=全部版本）· 统计范围为当前未解决问题</div>
+      <pre id="statsText" style="white-space:pre-wrap;font-family:inherit;font-size:13px;line-height:1.8;background:#fcf8f0;border:1px solid #f0e8dc;border-radius:8px;padding:12px 14px;margin:0 0 12px;color:#1f2329"></pre>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button class="btn btn-primary btn-sm" id="btnStatsCopy">📋 一键复制</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 模态框：删除 BUG ============ -->
+<div class="modal-mask hidden" id="deleteModal">
+  <div class="modal modal-sm">
+    <div class="modal-head"><h3>🗑️ 删除 BUG</h3><span class="modal-close" data-close="deleteModal">✕</span></div>
+    <div class="modal-body">
+      <div class="form-row"><label>BUG 编号</label><div id="delId" class="form-static"></div></div>
+      <div class="form-row"><label>标题</label><div id="delTitle" class="form-static note-title-full"></div></div>
+      <div class="form-row"><label>当前责任人</label><div id="delOwner" class="form-static"></div></div>
+      <div class="form-row"><label>删除原因 <span style="color:#e85418">*</span>（必填，记录在变更历史中）</label>
+        <textarea id="delReason" rows="3" placeholder="如：非本团队问题 / 重复单 / 误导入…"></textarea>
+      </div>
+      <div class="restore-warn">删除后该 BUG 从列表与所有看板统计中<strong>同步移除</strong>，可通过「历史」查看删除记录，<strong>不可恢复</strong>。</div>
+      <div class="form-actions">
+        <button class="btn btn-danger" id="btnDeleteOk">确认删除</button>
+        <button class="btn btn-plain" data-close="deleteModal">取消</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 模态框：导出维度选择 ============ -->
+<div class="modal-mask hidden" id="exportDimModal">
+  <div class="modal modal-sm">
+    <div class="modal-head"><h3>📤 导出问题清单</h3><span class="modal-close" data-close="exportDimModal">✕</span></div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:#787878;margin-bottom:12px">选择导出维度，文件格式：<code>版本号-姓名（条数）</code> + 编号列表</div>
+      <div class="dim-options">
+        <div class="dim-option" id="btnExportDimOwner">
+          <div class="dim-icon">👤</div>
+          <div><b>按人员维度</b><div class="dim-sub">按责任人聚合，组内按版本排列</div></div>
+        </div>
+        <div class="dim-option" id="btnExportDimVersion">
+          <div class="dim-icon">📦</div>
+          <div><b>按版本维度</b><div class="dim-sub">按发现发布聚合，组内按姓名排列</div></div>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-plain" data-close="exportDimModal">取消</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 列筛选弹层 -->
+<div class="filter-pop hidden" id="filterPop"></div>
+
+<script src="vendor/echarts.min.js"></script>
+<script src="js/engine.js?v=1340"></script>
+<script src="js/storage.js?v=1340"></script>
+<script src="js/parser.js?v=1340"></script>
+<script src="js/app.js?v=1340"></script>
+</body>
+</html>

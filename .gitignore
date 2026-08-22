@@ -1,0 +1,9 @@
+# bug-tracker 敏感与运行数据（不入库）
+bug-tracker/auth.json
+bug-tracker/backup/
+bug-tracker/data/state.json
+bug-tracker/data/login-records.json
+bug-tracker/data/backup-log.json
+bug-tracker/data/backup-meta.json
+bug-tracker/__pycache__/
+*.pyc

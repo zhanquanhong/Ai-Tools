@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 · BUG 处理进展跟踪</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+  body { min-height:100vh; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#f8e8e0 0%,#f0f2f5 60%); }
+  .login-box { width:380px; max-width:92vw; background:#fff; border-radius:14px; box-shadow:0 8px 32px rgba(0,0,0,.12); padding:34px 32px 28px; }
+  .login-logo { width:52px; height:52px; border-radius:13px; background:linear-gradient(135deg,#e85418,#fdbe31); display:flex; align-items:center; justify-content:center; font-size:26px; color:#fff; margin:0 auto 14px; }
+  .login-title { text-align:center; font-size:18px; font-weight:700; color:#1f2329; }
+  .login-sub { text-align:center; font-size:12px; color:#989898; margin:6px 0 22px; }
+  .field { margin-bottom:14px; }
+  .field label { display:block; font-size:12px; color:#787878; margin-bottom:5px; }
+  .field input { width:100%; padding:10px 12px; border:1px solid #ddd; border-radius:8px; font-size:14px; outline:none; transition:border .15s; }
+  .field input:focus { border-color:#e85418; }
+  .login-btn { width:100%; padding:11px; border:none; border-radius:8px; background:linear-gradient(135deg,#e85418,#f0763a); color:#fff; font-size:14px; font-weight:600; cursor:pointer; transition:opacity .15s; }
+  .login-btn:hover { opacity:.9; }
+  .login-btn:disabled { opacity:.6; cursor:not-allowed; }
+  .login-error { display:none; background:#fdeaea; color:#b33a3a; border:1px solid #f0c4c4; font-size:12px; padding:8px 10px; border-radius:6px; margin-bottom:12px; }
+  .login-error.show { display:block; }
+  .login-tip { text-align:center; font-size:11px; color:#b0b0b0; margin-top:14px; }
+  .loading { text-align:center; font-size:12px; color:#787878; padding:30px 0; }
+  .loading .spin { display:inline-block; width:26px; height:26px; border:3px solid #f0b8a0; border-top-color:#e85418; border-radius:50%; animation:spin 0.8s linear infinite; margin-bottom:10px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+  <div class="login-box" id="loginBox">
+    <div class="login-logo">🐞</div>
+    <div class="login-title">BUG 处理进展跟踪</div>
+    <div class="login-sub">请输入账号密码后访问</div>
+    <div class="login-error" id="loginError"></div>
+    <form id="loginForm" autocomplete="on">
+      <div class="field">
+        <label for="username">账号</label>
+        <input type="text" id="username" name="username" placeholder="请输入账号" autocomplete="username" required autofocus>
+      </div>
+      <div class="field">
+        <label for="password">密码</label>
+        <input type="password" id="password" name="password" placeholder="请输入密码" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="login-btn" id="loginBtn">登 录</button>
+    </form>
+    <div class="login-tip">登录后数据与团队共享 · 会话有效期 7 天</div>
+  </div>
+  <div class="login-box" id="loadingBox" style="display:none">
+    <div class="loading"><div class="spin"></div><div>正在验证登录状态…</div></div>
+  </div>
+<script>
+(function () {
+  'use strict';
+  var box = document.getElementById('loginBox');
+  var loading = document.getElementById('loadingBox');
+  var errorEl = document.getElementById('loginError');
+  var btn = document.getElementById('loginBtn');
+
+  // 若已登录，直接跳转
+  fetch('/api/state', { cache: 'no-store', credentials: 'same-origin' })
+    .then(function (res) {
+      if (res.status === 200) { window.location.href = '/index.html'; }
+      else { box.style.display = ''; loading.style.display = 'none'; }
+    })
+    .catch(function () {
+      box.style.display = '';
+      loading.style.display = 'none';
+    });
+
+  document.getElementById('loginForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var user = document.getElementById('username').value.trim();
+    var pwd = document.getElementById('password').value;
+    if (!user || !pwd) { showError('请输入账号和密码'); return; }
+    errorEl.classList.remove('show');
+    btn.disabled = true;
+    btn.textContent = '登录中…';
+    fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ user: user, pass: pwd })
+    }).then(function (res) {
+      if (res.ok) { window.location.href = '/index.html'; return; }
+      return res.json().then(function (d) { throw new Error(d.error || '登录失败'); });
+    }).catch(function (err) {
+      showError(err.message || '登录失败，请重试');
+      btn.disabled = false;
+      btn.textContent = '登 录';
+    });
+  });
+
+  function showError(msg) {
+    errorEl.textContent = msg;
+    errorEl.classList.add('show');
+  }
+})();
+</script>
+</body>
+</html>
