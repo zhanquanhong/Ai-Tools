@@ -324,11 +324,12 @@ def load_auth():
         if user and pwd:
             return [{'user': user, 'pass': pwd, 'role': 'user'}]
     except FileNotFoundError:
-        pass
+        print('⚠️  未找到 auth.json，请创建并配置账号（格式见 README「快速开始」）', file=sys.stderr)
+        return []
     except Exception as e:  # noqa: BLE001
         print('[auth] 配置读取失败: %s' % e, file=sys.stderr)
-    print('⚠️  未找到有效 auth.json，使用默认账密 admin / admin123（请尽快修改！）', file=sys.stderr)
-    return [{'user': 'admin', 'pass': 'admin123', 'role': 'admin'}]
+        print('⚠️  auth.json 无效，请检查格式：{"accounts": {"用户名": {"pass": "密码", "role": "admin|user"}}}', file=sys.stderr)
+        return []
 
 AUTH_ACCOUNTS = load_auth()
 
@@ -532,6 +533,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         # 常量时间比较，防时序攻击；多账号遍历匹配
         matched = None
+        if not AUTH_ACCOUNTS:
+            self._json(503, {'ok': False, 'error': '未配置账号：请管理员在服务器上配置 auth.json 后重启服务'})
+            return
         for acc in AUTH_ACCOUNTS:
             if secrets.compare_digest(user, acc['user']) and secrets.compare_digest(pwd, acc['pass']):
                 matched = acc
