@@ -134,7 +134,8 @@
    * @param {object} state 当前状态（会被修改）
    * @param {Array<object>} rows 导入的原始行（含 编号 等字段）
    * @param {string} nowIso 导入时间 ISO 字符串
-   * @returns {{imported:number, solved:number, reactivated:number, ownerChanges:number, warnings:string[]}}
+   * @returns {{imported:number, solved:number, reactivated:number, ownerChanges:number, warnings:string[],
+   *            importedIds:string[], reactivatedIds:string[]}}
    */
   function applyImport(state, rows, nowIso) {
     if (!state.bugs) state.bugs = {};
@@ -214,6 +215,8 @@
     let reactivatedCount = 0;
     let ownerChanges = 0;
     let ownerSkipped = 0;   // 原始负责人保护跳过的次数
+    const importedIds = [];      // v1.45.0：本次全新导入的 BUG id（供「新增」点击跳列表）
+    const reactivatedIds = [];   // v1.45.0：本次被重新激活的 BUG id（供「重新激活」点击跳列表）
 
     incoming.forEach((inc) => {
       const existed = state.bugs[inc.id];
@@ -222,6 +225,7 @@
         inc.sys.firstSeenAt = nowIso;
         state.bugs[inc.id] = inc;
         importedCount++;
+        importedIds.push(inc.id);
         bumpVersion(inc.fields['发现发布'], 'imported');
         // 人员名单自动补全
         const o = ownerOf(inc);
@@ -268,6 +272,7 @@
         rec.sys.reactivatedAt = nowIso;
         // 重新激活后 lastSolvedAt 保留（用于统计"曾解决"），活跃判定由 reactivatedAt 覆盖
         reactivatedCount++;
+        reactivatedIds.push(rec.id);
       }
       // 版本变更检测（v1.23.0）：以最新导入版本号为准，同步更新并罗列变更编号
       const oldVer = (rec.fields['发现发布'] || '').trim() || '未标注';
@@ -331,6 +336,8 @@
       ownerSkipped,
       versionChanges,                       // 版本变更清单 [{id, from, to}]
       solvedIds,
+      importedIds,                          // v1.45.0：本次新增 BUG id 列表
+      reactivatedIds,                       // v1.45.0：本次重新激活 BUG id 列表
       skippedRows,                          // 缺编号未导入的行 [{row, hint}]
       cleanedIds,                           // 编号含隐藏字符被清洗 [{from, to}]
       warnings
@@ -532,7 +539,7 @@
     let overdue = 0;
     const versionMap = {};   // 发现发布 → 数量
     const severityMap = {};  // 严重程度 → 数量
-    const ownerMap = {};     // 责任人 → { active, overdue }
+    const ownerMap = {};     // 责任人 → { active, overdue, maxDays }
 
     active.forEach((rec) => {
       const ver = (rec.fields['发现发布'] || '').trim() || '未标注';
@@ -542,13 +549,17 @@
       severityMap[sev] = (severityMap[sev] || 0) + 1;
 
       const owner = ownerOf(rec);
-      if (!ownerMap[owner]) ownerMap[owner] = { active: 0, overdue: 0 };
+      if (!ownerMap[owner]) ownerMap[owner] = { active: 0, overdue: 0, maxDays: 0 };
       ownerMap[owner].active++;
 
       const days = parseInt(rec.fields['停留天数'], 10);
-      if (!isNaN(days) && days >= threshold) {
-        overdue++;
-        ownerMap[owner].overdue++;
+      if (!isNaN(days)) {
+        // 超期：停留天数 ≥ 阈值（数量）；maxDays：该责任人名下停留天数最大值（与 BUG 列表「停留天数」列口径一致）
+        if (days >= threshold) {
+          overdue++;
+          ownerMap[owner].overdue++;
+        }
+        if (days > ownerMap[owner].maxDays) ownerMap[owner].maxDays = days;
       }
     });
 
@@ -872,6 +883,7 @@
           if (c.value.indexOf(raw) === -1) return false;
         } else if (c.type === 'ids') {
           // 编号模糊匹配：任一关键词被 记录id 或 编号字段 包含即通过（不区分大小写）
+          // v1.42.0：exclude=true 时反转——排除包含任一关键词的记录（反选）
           if (!c.value || c.value.length === 0) continue;
           const idLow = String(rec.id || '').toLowerCase();
           const rawLow = raw.toLowerCase();
@@ -879,7 +891,21 @@
             const kw = String(v).toLowerCase();
             return kw && (idLow.indexOf(kw) !== -1 || rawLow.indexOf(kw) !== -1);
           });
-          if (!hit) return false;
+          if (c.exclude ? hit : !hit) return false;
+        } else if (c.type === 'idset') {
+          // v1.45.0：按指定 id 集合精确匹配（导入结果面板「新增 / 重新激活」跳转用），不走模糊
+          if (!c.value || c.value.length === 0) continue;
+          if (c.value.indexOf(String(rec.id)) === -1) return false;
+        } else if (c.type === 'kwlist') {
+          // 长文本列模糊匹配（v1.44.0）：任一关键词被该字段包含即通过（不区分大小写）；
+          // exclude=true 时反转——排除包含任一关键词的记录（反选）
+          if (!c.value || c.value.length === 0) continue;
+          const rawLow = raw.toLowerCase();
+          const hit = c.value.some((v) => {
+            const kw = String(v).toLowerCase();
+            return kw && rawLow.indexOf(kw) !== -1;
+          });
+          if (c.exclude ? hit : !hit) return false;
         } else if (c.type === 'text') {
           if (!c.value) continue;
           if (raw.toLowerCase().indexOf(String(c.value).toLowerCase()) === -1) return false;

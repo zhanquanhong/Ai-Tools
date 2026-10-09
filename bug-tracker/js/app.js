@@ -5,7 +5,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.41.0';
+  const APP_VERSION = '1.45.0';
   // 更新日志从后端 API 拉取（data/changelog.json），不再硬编码在前端
   let CHANGELOG = [];
   // 历史更新日志已迁移至 data/changelog.json（63 条，v1.0.0 ~ v1.33.1），由 /api/changelog 提供
@@ -31,8 +31,9 @@
   let pendingImport = null;       // 待确认的导入解析结果
   let activeFilters = {};         // 列筛选 { colName: {type,value} }
   let quickSearch = '';
-  let ownerSortDir = 0;           // 当前责任人列排序：0=默认(未排序) 1=升序 -1=降序
+  let listSort = { col: '', dir: 0 };  // BUG 列表列排序：col=排序列（当前责任人/最近修改时间），dir=1升序 -1降序 0默认
   let selectedBugId = null;       // BUG 列表当前选中行（点击持久高亮，点其他行切换，再点同行取消）
+  let lastBatchMeta = null;       // v1.45.0：导入结果「新增/重新激活」跳转的来源标记 { kind:'add'|'react', count }
   let trendChart = null;
   let monthChart = null;
   let syncMode = 'local';         // 'local' 离线 / 'shared' 共享
@@ -206,6 +207,8 @@
     }
     applyRolePermission();
   };
+  // __TEST_HOOK__：冒烟测试直接渲染导入结果面板（验证「新增/重新激活」可点跳转）
+  window.__bugtrackerShowImportResult = (result, nowIso) => renderImportResultPanel(result, nowIso || new Date().toISOString());
   function renderAll() {
     renderNavCounts();
     renderLastImport();
@@ -245,6 +248,19 @@
   }
 
   // ---------- 视图：导入 ----------
+  /** v1.45.0：从导入结果面板跳转 BUG 列表，并只显示指定 id 集合（新增 / 重新激活） */
+  function jumpToImportBatch(kind, ids) {
+    const list = (ids || []).slice();
+    if (!list.length) return;
+    lastBatchMeta = { kind: kind, count: list.length };
+    activeFilters = { __importBatch: { type: 'idset', value: list } };
+    quickSearch = '';
+    const qs = $('#quickSearch');
+    if (qs) qs.value = '';
+    switchView('list');
+    renderList();
+  }
+
   function initImportView() {
     const dz = $('#dropzone');
     const input = $('#fileInput');
@@ -342,6 +358,25 @@
 
     if (!saved) return;
 
+    renderImportResultPanel(result, nowIso);
+
+    // 自动备份提示
+    setTimeout(() => {
+      if (confirm('导入成功！建议立即备份数据（导出完整备份 .xlsx），防止浏览器数据丢失。\n\n现在导出备份？')) {
+        exportBackup();
+      }
+    }, 300);
+
+    renderAll();
+  }
+
+
+  /**
+   * v1.45.0：渲染导入结果面板（含「新增 / 重新激活」可点数字、撤销判定解决）
+   * @param {object} result Engine.applyImport 返回值
+   * @param {string} nowIso 导入时间 ISO
+   */
+  function renderImportResultPanel(result, nowIso) {
     // 漏导防护：>30% 消失需要二次确认 —— 此处已产生告警则提示
     const warnHtml = result.warnings.length
       ? `<div style="color:#b33a3a;margin-top:8px">⚠️ ${result.warnings.join('；')}</div>` : '';
@@ -374,16 +409,18 @@
         ${shown}${result.versionChanges.length > 8 ? ` 等 ${result.versionChanges.length} 个` : ''}
       </div>`;
     }
+    const nAddClk = (result.importedIds || []).length > 0;
+    const nReClk = (result.reactivatedIds || []).length > 0;
     const el = $('#importResult');
     el.className = 'import-result ' + (result.warnings.length || result.skippedRows.length ? 'warn' : 'ok');
     el.innerHTML = `
       <b>✅ 导入完成（${fmtTime(nowIso)}）</b>
       <div class="nums">
         <div><b class="n-total">${result.totalCount}</b>总条数${result.rawCount !== result.totalCount ? `<span style="font-size:11px;color:#989898">（原始 ${result.rawCount} 行）</span>` : ''}</div>
-        <div><b class="n-add">${result.imported}</b>新增</div>
+        <div class="${nAddClk ? 'num-jump' : ''}"${nAddClk ? ' data-jump-batch="add" title="点击查看本次新增的 BUG 列表"' : ''}><b class="n-add">${result.imported}</b>新增</div>
         <div><b class="n-exist">${result.existingCount}</b>已存在</div>
         <div><b class="n-fix">${result.solved}</b>判定解决</div>
-        <div><b class="n-re">${result.reactivated}</b>重新激活</div>
+        <div class="${nReClk ? 'num-jump' : ''}"${nReClk ? ' data-jump-batch="react" title="点击查看本次重新激活的 BUG 列表"' : ''}><b class="n-re">${result.reactivated}</b>重新激活</div>
         <div><b class="n-own">${result.ownerChanges}</b>更新责任人</div>
         <div><b class="n-ver">${result.versionChanges ? result.versionChanges.length : 0}</b>版本变更</div>
         <div><b class="n-skip">${result.ownerSkipped}</b>跳过白名单</div>
@@ -394,6 +431,13 @@
       ${result.solved ? `<div class="undo-row"><button class="btn btn-plain btn-sm" id="btnUndoSolved">↩ 撤销判定解决（${result.solved} 个）</button><span style="font-size:11px;color:#989898">误判时点击，恢复为未解决</span></div>` : ''}
       ${warnHtml}`;
     el.classList.remove('hidden');
+    // v1.45.0：「新增 / 重新激活」数字点击 → 跳转 BUG 列表并只显示这批 BUG
+    $$('#importResult .num-jump').forEach((n) => {
+      n.onclick = () => jumpToImportBatch(
+        n.dataset.jumpBatch,
+        n.dataset.jumpBatch === 'add' ? result.importedIds : result.reactivatedIds
+      );
+    });
     const undoBtn = $('#btnUndoSolved');
     if (undoBtn) {
       undoBtn.onclick = () => {
@@ -406,14 +450,6 @@
       };
     }
 
-    // 自动备份提示
-    setTimeout(() => {
-      if (confirm('导入成功！建议立即备份数据（导出完整备份 .xlsx），防止浏览器数据丢失。\n\n现在导出备份？')) {
-        exportBackup();
-      }
-    }, 300);
-
-    renderAll();
   }
 
   // ---------- 备份导出 / 恢复 ----------
@@ -638,18 +674,31 @@
     const totalAll = scopedBugs.length;
     const fixedAll = scopedBugs.filter((r) => !Engine.isActive(r)).length;
     const cards = [
-      { cls: 'c1', label: '今日新增', value: todayImported, delta: impDelta == null ? '首次快照' : (impDelta >= 0 ? `▲ 较${prevLabel || '昨日'} +${impDelta}` : `▼ 较${prevLabel || '昨日'} ${impDelta}`), up: impDelta != null && impDelta >= 0 },
+      { cls: 'c1', label: '今日新增', value: todayImported, delta: impDelta == null ? '首次快照' : (impDelta >= 0 ? `▲ 较${prevLabel || '昨日'} +${impDelta}` : `▼ 较${prevLabel || '昨日'} ${impDelta}`), up: impDelta != null && impDelta >= 0, jump: true },
       { cls: 'c2', label: '今日解决', value: todaySolved, delta: solDelta == null ? '首次快照' : (solDelta >= 0 ? `▲ 较${prevLabel || '昨日'} +${solDelta}` : `▼ 较${prevLabel || '昨日'} ${solDelta}`), up: solDelta != null && solDelta >= 0 },
       { cls: 'c3', label: '未解决总数', value: stats.totalActive, delta: `净增 ${(todayImported - todaySolved) >= 0 ? '+' : ''}${todayImported - todaySolved}` },
       { cls: 'c4', label: `停留超期(≥${stats.overdueThreshold}天)`, value: stats.overdue, delta: `占未解决 ${stats.totalActive ? Math.round(stats.overdue / stats.totalActive * 100) : 0}%` },
       { cls: 'c5', label: '累计问题', value: totalAll, delta: `已修复 ${fixedAll} · 未解决 ${totalAll - fixedAll}` }
     ];
     $('#statCards').innerHTML = cards.map((c) => `
-      <div class="card ${c.cls}"><div class="bar"></div>
+      <div class="card ${c.cls}${c.jump ? ' card-clickable' : ''}"${c.jump ? ' data-jump="todayNew"' : ''}><div class="bar"></div>
         <div class="label">${c.label}</div>
         <div class="value">${c.value}</div>
         <div class="delta ${c.up ? 'up' : ''}">${c.delta}</div>
       </div>`).join('');
+    // v1.42.0：「今日新增」卡片点击 → 跳转 BUG 列表并筛选今日新增（联动看板版本筛选，与严重程度/责任人卡片口径一致）
+    $$('#statCards .card[data-jump]').forEach((el) => {
+      el.addEventListener('click', () => {
+        activeFilters = { __todayNew: { type: 'todayNew', value: true } };
+        const dv = state.dashboardVersions || [];
+        if (dv.length) activeFilters['发现发布'] = { type: 'enum', value: dv.slice() };
+        quickSearch = '';
+        const qs = $('#quickSearch');
+        if (qs) qs.value = '';
+        switchView('list');
+        renderList();
+      });
+    });
 
     // 版本统计（v1.22.0 口径统一：数量=当前活跃 BUG 按版本分组，与严重程度卡片/列表同源；
     // 始终显示全部活跃版本，选中版本高亮，点击版本号多选切换筛选）
@@ -960,11 +1009,12 @@
       const info = stats.byOwner[o];
       const width = Math.round(info.active / maxActive * 100);
       const overdueTag = info.overdue ? `<span class="badge-old">超期 ${info.overdue}</span>` : '';
+      // v1.42.1：「最长停留」= 该责任人名下停留天数最大值；「超期」徽标 = 超期数量，两者语义区分
       return `<div class="person-row" data-owner="${encodeURIComponent(o)}" title="点击查看 ${o} 的问题列表">
         <span class="owner-idx">${idx + 1}</span>
         <div class="avatar" style="background:${avatarColor(o)}">${o.charAt(0)}</div>
         <div class="person-meta"><div class="name">${o} ${overdueTag}</div>
-        <div class="nums">未解决 ${info.active} · 超期 ${info.overdue}</div></div>
+        <div class="nums">未解决 ${info.active} · 最长停留 ${info.maxDays} 天</div></div>
         <div class="person-bar"><i style="width:${width}%"></i></div>
       </div>`;
     }).join('');
@@ -1005,16 +1055,48 @@
         });
       });
     }
-    // 当前责任人列排序（0=默认不排序，1=升序，-1=降序）
-    if (ownerSortDir !== 0) {
+    // 列排序（v1.42.0 通用化：当前责任人=中文名比较；最近修改时间=时间戳比较；空值一律排最后）
+    if (listSort.col && listSort.dir !== 0) {
+      const col = listSort.col;
+      const dir = listSort.dir;
       out = out.slice().sort((a, b) => {
-        const oa = Engine.ownerOf(a);
-        const ob = Engine.ownerOf(b);
-        const cmp = oa.localeCompare(ob, 'zh');
-        return ownerSortDir > 0 ? cmp : -cmp;
+        const va = col === '当前责任人' ? Engine.ownerOf(a) : (a.fields[col] == null ? '' : String(a.fields[col]));
+        const vb = col === '当前责任人' ? Engine.ownerOf(b) : (b.fields[col] == null ? '' : String(b.fields[col]));
+        const aEmpty = va == null || va === '';
+        const bEmpty = vb == null || vb === '';
+        if (aEmpty && bEmpty) return 0;
+        if (aEmpty) return 1;   // 空值排最后（无论升降序）
+        if (bEmpty) return -1;
+        let cmp;
+        if (col === '最近修改时间') {
+          const ta = parseTimeStr(va), tb = parseTimeStr(vb);
+          if (ta == null && tb == null) return 0;
+          if (ta == null) return 1;
+          if (tb == null) return -1;
+          cmp = ta - tb;
+        } else {
+          cmp = String(va).localeCompare(String(vb), 'zh');
+        }
+        return dir > 0 ? cmp : -cmp;
       });
     }
     return out;
+  }
+
+  /** 解析时间字符串为 UTC 时间戳（兼容 '2026-08-12 13:53:33 GMT+08:00' / 'GMT+0' / '2026-08-12' 等），失败返回 null */
+  function parseTimeStr(s) {
+    if (!s) return null;
+    const str = String(s);
+    const m = str.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?(?:\s*(?:GMT)?([+-]\d{1,2})(?::?(\d{2}))?)?/);
+    if (!m) return null;
+    let t = new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)).getTime();
+    if (m[7]) {
+      const offH = parseInt(m[7], 10);
+      const offM = m[8] ? parseInt(m[8], 10) : 0;
+      const offMin = offH * 60 + (offH < 0 ? -offM : offM);
+      t -= offMin * 60000;   // 统一转为 UTC 时间戳，GMT+08:00 与 GMT+0 混用也能正确排序
+    }
+    return t;
   }
 
   const STATUS_COLORS = {
@@ -1039,15 +1121,26 @@
 
   // ---------- BUG 列表列宽拖拽 ----------
   const COLW_KEY = 'bugtracker:colwidths';
+  /** 各列默认宽度（px）：取自 v1.44.0 改造前真实数据的实测渲染宽度，
+   *  用途 = table-layout:fixed 下未拖拽列的宽度（保证改造前后观感一致）+ 双击手柄/一键重置的恢复值 */
+  const DEFAULT_COL_W = {
+    '标题': 281, '描述': 281, '编号': 141, '严重程度': 83, '当前责任人': 179,
+    '状态': 60, '发现发布': 88, '分析原因': 281, '停留天数': 83, '最近修改时间': 200,
+    '创建人': 71, '退回原因': 281, '激活原因': 281, '最近更新人': 95, '操作': 165
+  };
+  const DEFAULT_COL_W_FALLBACK = 120;
   function loadColWidths() {
     try { const w = JSON.parse(localStorage.getItem(COLW_KEY)); return w && typeof w === 'object' ? w : {}; } catch (e) { return {}; }
   }
   function saveColWidths(w) {
     try { localStorage.setItem(COLW_KEY, JSON.stringify(w)); } catch (e) { /* 忽略 */ }
   }
-  function colWidthOf(c) {
+  /** 列宽（px，number）：用户拖拽值优先，其次默认宽度表 */
+  function colWidthPx(c) {
     const w = loadColWidths();
-    return w[c] || '';
+    const v = parseInt(w[c], 10);
+    if (v > 0) return v;
+    return DEFAULT_COL_W[c] || DEFAULT_COL_W_FALLBACK;
   }
 
   function renderList() {
@@ -1067,17 +1160,38 @@
     // 「今日新增」快捷筛选按钮高亮
     const tnBtn = $('#btnTodayNew');
     if (tnBtn) tnBtn.classList.toggle('has-filter', !!activeFilters.__todayNew);
+    // v1.45.0：导入批次来源标签（新增 / 重新激活），可一键清除
+    const srcTag = $('#filterSrcTag');
+    if (srcTag) {
+      if (activeFilters.__importBatch && lastBatchMeta) {
+        const kindTxt = lastBatchMeta.kind === 'add' ? '新增' : '重新激活';
+        srcTag.innerHTML = `本次导入·${kindTxt} <b>${lastBatchMeta.count}</b> <span class="src-tag-x" title="清除该筛选">✕</span>`;
+        srcTag.classList.remove('hidden');
+        srcTag.title = '当前仅显示本次导入的' + kindTxt + ' BUG，点击清除';
+        srcTag.onclick = () => {
+          delete activeFilters.__importBatch;
+          lastBatchMeta = null;
+          renderList();
+        };
+      } else {
+        srcTag.classList.add('hidden');
+        srcTag.innerHTML = '';
+        srcTag.onclick = null;
+      }
+    }
 
-    // 表头（含筛选图标）；「当前责任人」列支持排序（点击表头切换 升序/降序/默认）
+    // 表头（含筛选图标）；「当前责任人」「最近修改时间」列支持排序（点击表头切换 升序/降序/默认）
     // 列宽：colgroup 控制（用户拖拽宽度存 localStorage，未设置用默认宽度）
-    $('#bugColgroup').innerHTML = showColumns.map((c) => `<col style="${colWidthOf(c) ? 'width:' + colWidthOf(c) + 'px' : ''}">`).join('') + '<col>';
+    $('#bugColgroup').innerHTML = showColumns.map((c) => `<col style="width:${colWidthPx(c)}px">`).join('') + `<col style="width:${colWidthPx('操作')}px">`;
     $('#bugThead').innerHTML = '<tr>' + showColumns.map((c) => {
       const isFiltered = activeFilters[c];
       let sortMark = '';
       let extra = '';
-      if (c === '当前责任人') {
-        sortMark = ownerSortDir === 1 ? ' ▲' : (ownerSortDir === -1 ? ' ▼' : ' ⇅');
-        extra = ` data-sort="1" style="cursor:pointer" title="点击排序（升序/降序/默认）"`;
+      const sortable = c === '当前责任人' || c === '最近修改时间';
+      if (sortable) {
+        const active = listSort.col === c;
+        sortMark = active ? (listSort.dir === 1 ? ' ▲' : (listSort.dir === -1 ? ' ▼' : ' ⇅')) : ' ⇅';
+        extra = ` data-sort="1" data-col="${c}" style="cursor:pointer" title="点击排序（升序/降序/默认）"`;
       }
       return `<th class="${isFiltered ? 'filter-active' : ''}"${extra}><span class="th-resizer" data-col="${c}" title="拖动调整列宽"></span>${c} <span class="f-icon" data-col="${c}">${isFiltered ? '✓' : '▾'}</span><span class="sort-mark">${sortMark}</span></th>`;
     }).join('') + '<th>操作</th></tr>';
@@ -1131,6 +1245,15 @@
     // 列宽拖拽手柄（mousedown 拖动，mouseup 保存；click 阻断防止触发责任人列排序）
     $$('#bugThead .th-resizer').forEach((el) => {
       el.addEventListener('click', (e) => e.stopPropagation());
+      // v1.44.0：双击手柄 = 恢复该列默认宽度
+      el.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const widths = loadColWidths();
+        delete widths[el.dataset.col];
+        saveColWidths(widths);
+        renderList();
+      });
       el.addEventListener('mousedown', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1162,11 +1285,13 @@
         document.addEventListener('mouseup', onUp);
       });
     });
-    // 「当前责任人」表头排序点击（点击列标题，非筛选图标）
+    // 可排序列表头点击（点击列标题，非筛选图标）：升序 → 降序 → 默认 循环（v1.42.0 通用化）
     $$('#bugThead th[data-sort]').forEach((el) => {
       el.onclick = (e) => {
         if (e.target.closest('.f-icon')) return;   // 筛选图标走筛选弹层
-        ownerSortDir = ownerSortDir === 0 ? 1 : (ownerSortDir === 1 ? -1 : 0);
+        const col = el.dataset.col;
+        if (listSort.col !== col) listSort = { col, dir: 1 };
+        else listSort = { col, dir: listSort.dir === 1 ? -1 : (listSort.dir === -1 ? 0 : 1) };
         renderList();
       };
     });
@@ -1225,6 +1350,9 @@
     });
   }
 
+  /** 长文本列（v1.44.0）：筛选交互统一为「多关键词模糊匹配 + 反选」 */
+  const TEXT_FILTER_COLS = ['标题', '描述', '分析原因', '退回原因', '激活原因'];
+
   /** 列筛选弹层 */
   function openFilterPop(anchor, col) {
     const pop = $('#filterPop');
@@ -1238,11 +1366,30 @@
 
     const cur = activeFilters[col] || {};
     let html = `<h5>${col} 筛选</h5>`;
-    if (col === '编号') {
-      // 编号列：支持多单号输入（逗号/空格/换行分隔）
+    if (TEXT_FILTER_COLS.indexOf(col) !== -1) {
+      // 长文本列（v1.44.0）：多关键词模糊匹配（任一命中）+ 反选（排除命中）
+      const curVal = cur.type === 'kwlist' ? (cur.value || []).join(', ') : (cur.type === 'text' ? (cur.value || '') : '');
+      html += `<input type="text" class="filter-input" id="fpKw" placeholder="输入关键词，如：超时" value="${escapeHtml(curVal)}">
+        <label class="filter-exclude"><input type="checkbox" id="fpKwExclude" ${cur.exclude ? 'checked' : ''}> 反选（排除包含这些关键词的记录）</label>
+        <div style="font-size:11px;color:#989898;margin-bottom:6px">支持模糊匹配（包含即命中）· 多个关键词用逗号/空格分隔，匹配任一</div>`;
+    } else if (col === '编号') {
+      // 编号列：支持多单号输入（逗号/空格/换行分隔）+ 反选（排除匹配，v1.42.0）
       const curVal = cur.type === 'ids' ? (cur.value || []).join(', ') : '';
       html += `<input type="text" class="filter-input" id="fpIds" placeholder="输入编号关键词，如：56701" value="${escapeHtml(curVal)}">
+        <label class="filter-exclude"><input type="checkbox" id="fpIdsExclude" ${cur.exclude ? 'checked' : ''}> 反选（排除包含这些关键词的编号）</label>
         <div style="font-size:11px;color:#989898;margin-bottom:6px">支持模糊匹配（包含即命中）· 多个关键词用逗号/空格分隔，匹配任一</div>`;
+    } else if (col === '当前责任人') {
+      // v1.45.0：责任人列改「搜索框 + 复选列表」多选（人数可达上百，需搜索定位）
+      const sel = (cur.type === 'enum' && cur.value) ? cur.value : [];
+      html += `<input type="text" class="filter-input filter-search" id="fpOwnerSearch" placeholder="🔍 搜索姓名…">
+        <div class="filter-opts-tools">
+          <button type="button" class="btn btn-plain btn-xs" id="fpSelAll">全选</button>
+          <button type="button" class="btn btn-plain btn-xs" id="fpSelNone">清空</button>
+          <span class="filter-opts-count" id="fpOwnerCount">${sel.length ? '已选 ' + sel.length + '/' + values.length : ''}</span>
+        </div>
+        <div class="filter-opts scroll" id="fpOwnerOpts">${values.map((v) =>
+          `<label data-name="${escapeHtml(String(v).toLowerCase())}"><input type="checkbox" value="${String(v).replace(/"/g, '&quot;')}" ${sel.indexOf(v) !== -1 ? 'checked' : ''}> ${escapeHtml(v)}</label>`).join('')}</div>
+        <div class="filter-hint">支持多选 · 全选/清空仅作用于当前搜索结果</div>`;
     } else if (values.length <= 30 && values.length > 0) {
       // 枚举多选（v1.41.0：支持全选/清空快捷操作，全选=该列不过滤）
       const sel = (cur.type === 'enum' && cur.value) ? cur.value : [];
@@ -1292,11 +1439,29 @@
     pop.style.top = top + 'px';
 
     const collect = () => {
-      // 编号列：多单号匹配
+      // 长文本列（v1.44.0）：多关键词 + 反选
+      if (TEXT_FILTER_COLS.indexOf(col) !== -1) {
+        const raw = $('#fpKw') ? $('#fpKw').value : '';
+        const kws = raw.split(/[,，\s\n\r\t]+/).map((s) => s.trim()).filter(Boolean);
+        const exclude = $('#fpKwExclude') ? $('#fpKwExclude').checked : false;
+        if (kws.length) activeFilters[col] = { type: 'kwlist', value: kws, exclude: exclude || undefined };
+        else delete activeFilters[col];
+        return;
+      }
+      // 编号列：多单号匹配 + 反选（排除匹配，v1.42.0）
       if (col === '编号') {
         const raw = $('#fpIds').value;
         const ids = raw.split(/[,，\s\n\r\t]+/).map((s) => s.trim()).filter(Boolean);
-        if (ids.length) activeFilters[col] = { type: 'ids', value: ids };
+        const exclude = $('#fpIdsExclude') ? $('#fpIdsExclude').checked : false;
+        if (ids.length) activeFilters[col] = { type: 'ids', value: ids, exclude: exclude || undefined };
+        else delete activeFilters[col];
+        return;
+      }
+      // 责任人列（v1.45.0）：搜索多选 → 与枚举多选同口径（全选=不过滤）
+      if (col === '当前责任人') {
+        const checked = $$('#filterPop .filter-opts input:checked').map((i) => i.value);
+        if (checked.length && checked.length === values.length) delete activeFilters[col];
+        else if (checked.length) activeFilters[col] = { type: 'enum', value: checked };
         else delete activeFilters[col];
         return;
       }
@@ -1325,23 +1490,40 @@
     };
 
     $('#fpOk').onclick = () => { collect(); pop.classList.add('hidden'); renderList(); };
-    // v1.41.0：枚举多选全选/清空快捷操作
+    // v1.41.0：枚举多选全选/清空快捷操作；v1.45.0：仅作用于「当前搜索结果」（责任人列带搜索）
+    const visOpts = () => $$('#filterPop .filter-opts input').filter((i) => {
+      const lb = i.closest('label');
+      return lb && !lb.classList.contains('hidden');
+    });
+    const syncCount = () => {
+      const cnt = $('#filterPop .filter-opts-count');
+      if (cnt) cnt.textContent = '已选 ' + $$('#filterPop .filter-opts input:checked').length + '/' + values.length;
+    };
     const fpSelAll = $('#fpSelAll');
     if (fpSelAll) fpSelAll.onclick = () => {
-      $$('#filterPop .filter-opts input').forEach((i) => { i.checked = true; });
-      const n = $$('#filterPop .filter-opts input:checked').length;
-      const cnt = $('#filterPop .filter-opts-count');
-      if (cnt) cnt.textContent = '已选 ' + n + '/' + values.length;
+      visOpts().forEach((i) => { i.checked = true; });
+      syncCount();
     };
     const fpSelNone = $('#fpSelNone');
     if (fpSelNone) fpSelNone.onclick = () => {
-      $$('#filterPop .filter-opts input').forEach((i) => { i.checked = false; });
-      const cnt = $('#filterPop .filter-opts-count');
-      if (cnt) cnt.textContent = '';
+      visOpts().forEach((i) => { i.checked = false; });
+      syncCount();
     };
+    // 责任人列搜索：本地过滤选项（不改变已选状态）
+    const ownerSearch = $('#fpOwnerSearch');
+    if (ownerSearch) {
+      ownerSearch.oninput = () => {
+        const kw = ownerSearch.value.trim().toLowerCase();
+        $$('#fpOwnerOpts label').forEach((lb) => {
+          const name = lb.dataset.name || '';
+          lb.classList.toggle('hidden', !!kw && name.indexOf(kw) === -1);
+        });
+      };
+    }
     $('#fpClear').onclick = () => { delete activeFilters[col]; pop.classList.add('hidden'); renderList(); };
     $('#fpClearAll').onclick = () => {
       activeFilters = {};
+      lastBatchMeta = null;
       quickSearch = '';
       const qs = $('#quickSearch');
       if (qs) qs.value = '';
@@ -2088,7 +2270,7 @@
       else activeFilters.__todayNew = { type: 'todayNew', value: true };
       renderList();
     });
-    $('#btnClearFilters').addEventListener('click', () => { activeFilters = {}; quickSearch = ''; $('#quickSearch').value = ''; renderList(); });
+    $('#btnClearFilters').addEventListener('click', () => { activeFilters = {}; lastBatchMeta = null; quickSearch = ''; $('#quickSearch').value = ''; renderList(); });
     // 复制编号整列：复制当前列表（含筛选/搜索）全部编号，每行一个
     $('#btnCopyIds').addEventListener('click', () => {
       const recs = getFilteredRecords();
@@ -2097,6 +2279,14 @@
       copyText(text, `已复制 ${recs.length} 个编号`);
     });
     $('#btnExportFiltered').addEventListener('click', exportCurrentCsv);
+    // v1.44.0：一键恢复所有列宽为默认
+    $('#btnResetColW').addEventListener('click', () => {
+      const has = Object.keys(loadColWidths()).length > 0;
+      if (!has) { showAlert('列宽已是默认值'); return; }
+      saveColWidths({});
+      renderList();
+      showAlert('已恢复所有列宽为默认');
+    });
 
     // 人员
     $('#btnAddPerson').addEventListener('click', () => {

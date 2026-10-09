@@ -79,6 +79,11 @@ body { background:#f0f2f5; color:#1f2329; font-size:13px; }
 .import-result .nums .n-skip { color:#9b6fe8; }
 .import-result .nums .n-total { color:#1f2329; } .import-result .nums .n-exist { color:#5ac2ff; }
 .import-result .undo-row { display:flex; align-items:center; gap:10px; margin-top:8px; padding-top:8px; border-top:1px dashed #ddd; }
+/* v1.45.0：导入结果「新增 / 重新激活」可点数字 */
+.import-result .nums .num-jump { cursor:pointer; border-radius:6px; padding:2px 8px; margin:-2px -8px; transition:background .12s ease; }
+.import-result .nums .num-jump:hover { background:rgba(43,127,212,.12); }
+.import-result .nums .num-jump:hover b { text-decoration:underline; }
+.import-result .nums .num-jump::after { content:'↗'; font-size:11px; color:#2b7fd4; opacity:.7; margin-left:2px; }
 
 /* ===== 备份 ===== */
 .backup-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
@@ -94,6 +99,10 @@ body { background:#f0f2f5; color:#1f2329; font-size:13px; }
 .card .delta { font-size:11px; color:#989898; margin-top:3px; }
 .card .delta.up { color:#45bf82; } .card .delta.down { color:#e85418; }
 .card .bar { position:absolute; top:0; left:0; width:100%; height:4px; }
+.card-clickable { cursor:pointer; transition:transform .08s ease, box-shadow .08s ease; }
+.card-clickable:hover { transform:translateY(-2px); box-shadow:0 3px 10px rgba(0,0,0,.12); }
+.card-clickable:active { transform:translateY(0); }
+.filter-exclude { display:flex; align-items:center; gap:5px; font-size:12px; color:#484848; margin:4px 0 6px; cursor:pointer; }
 .c1 .bar { background:#5ac2ff; } .c1 .value { color:#2b7fd4; }
 .c2 .bar { background:#45bf82; } .c2 .value { color:#2f9e63; }
 .c3 .bar { background:#e85418; } .c3 .value { color:#e85418; }
@@ -190,8 +199,22 @@ body.dragging-active { user-select:none; cursor:grabbing; }
 .list-tools { display:flex; align-items:center; gap:8px; }
 .filter-info { font-size:12px; color:#787878; }
 .filter-info b { color:#e85418; }
+/* v1.45.0：导入批次来源标签（本次导入·新增 N ✕） */
+.filter-src-tag { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:#c0440f; background:#fdf1ea; border:1px solid #f2c4a8; border-radius:999px; padding:2px 10px; cursor:pointer; user-select:none; }
+.filter-src-tag b { color:#c0440f; }
+.filter-src-tag:hover { background:#fbe4d6; }
+.filter-src-tag .src-tag-x { font-size:11px; opacity:.75; }
+.filter-src-tag:hover .src-tag-x { opacity:1; }
 
 .table-wrap { overflow:auto; max-height:62vh; border:1px solid #eee; border-radius:8px; }
+/* ---- v1.44.0：列宽由 <colgroup> 显式控制（table-layout:fixed）----
+   文本列（标题/描述/分析原因/退回原因/激活原因）原先被 280px/320px 硬上限锁死（auto 布局下
+   max-width 即该列的最大内容贡献）→ 拖拽列宽保存了也不生效、拖宽也看不到更多文字。
+   改为：列宽 = colgroup 指定值（默认宽度表 + 用户拖拽覆盖），超出列宽由 td 省略号截断。 */
+#bugTable { table-layout: fixed; }
+#bugTable td { max-width: none; }
+#bugTable .col-title { max-width: none; }
+#bugTable .col-desc { display: block; max-width: none; }
 /* ---- BUG 表列宽拖拽 ---- */
 #bugTable .th-resizer { position:absolute; top:0; right:-4px; width:8px; height:100%; cursor:col-resize; z-index:5; user-select:none; }
 /* 操作列固定右侧：表格横向滚动时始终可见（防"按钮不见了"） */
@@ -323,6 +346,9 @@ th[data-sort] .sort-mark { color:#e85418; }
 .filter-range { display:flex; gap:6px; align-items:center; }
 .filter-range input { width:80px; padding:5px 8px; border:1px solid #ddd; border-radius:6px; font-size:12px; }
 .filter-actions { display:flex; gap:8px; justify-content:flex-end; border-top:1px solid #f0f0f0; padding-top:8px; }
+/* v1.45.0：责任人列搜索多选 */
+.filter-opts.scroll { max-height:260px; }
+.filter-hint { font-size:11px; color:#989898; margin:-2px 0 8px; }
 
 .footer { text-align:center; color:#b0b0b0; font-size:11px; margin:14px 0 6px; }
 

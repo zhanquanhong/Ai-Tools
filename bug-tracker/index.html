@@ -7,7 +7,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>BUG 处理进展跟踪</title>
-<link rel="stylesheet" href="css/style.css?v=1340">
+<link rel="stylesheet" href="css/style.css?v=1450">
 </head>
 <body>
 <div class="app">
@@ -161,11 +161,13 @@
         </div>
         <div class="list-tools">
           <span class="filter-info" id="filterInfo">共 <b>0</b> 条</span>
+          <span class="filter-src-tag hidden" id="filterSrcTag"></span>
           <button class="btn btn-plain btn-sm" id="btnTodayNew" title="只看今天首次发现的 BUG（与看板「今日新增」卡片口径一致）">🆕 今日新增</button>
           <button class="btn btn-plain btn-sm" id="btnCopyIds" title="复制当前列表全部编号（每行一个）">📋 复制编号</button>
           <button class="btn btn-plain btn-sm" id="btnExportVerOwner" title="按人员/版本维度导出（版本-姓名（条数）+ 编号）">📤 导出清单</button>
           <button class="btn btn-plain btn-sm" id="btnClearFilters" title="清除全部筛选">清除筛选</button>
           <button class="btn btn-plain btn-sm" id="btnExportFiltered">导出当前结果 (.csv)</button>
+          <button class="btn btn-plain btn-sm" id="btnResetColW" title="恢复所有列宽为默认（双击表头分隔线可恢复单列）">↺ 列宽</button>
         </div>
       </div>
       <div class="table-wrap">
@@ -453,9 +455,9 @@
 <div class="filter-pop hidden" id="filterPop"></div>
 
 <script src="vendor/echarts.min.js"></script>
-<script src="js/engine.js?v=1340"></script>
-<script src="js/storage.js?v=1340"></script>
-<script src="js/parser.js?v=1340"></script>
-<script src="js/app.js?v=1340"></script>
+<script src="js/engine.js?v=1450"></script>
+<script src="js/storage.js?v=1450"></script>
+<script src="js/parser.js?v=1450"></script>
+<script src="js/app.js?v=1450"></script>
 </body>
 </html>

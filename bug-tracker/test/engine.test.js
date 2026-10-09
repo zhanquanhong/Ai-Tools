@@ -597,6 +597,73 @@ test('动态筛选：编号列多单号匹配（ids 类型）', () => {
   assert.strictEqual(r.length, 3); // 空列表不过滤
 });
 
+test('动态筛选：编号列反选（exclude，v1.42.0）', () => {
+  const s = E.emptyState('1.0.0');
+  E.applyImport(s, [
+    row('B1', { '标题': 'a' }),
+    row('B2', { '标题': 'b' }),
+    row('B3', { '标题': 'c' })
+  ], '2026-08-12T09:00:00');
+  const recs = Object.values(s.bugs);
+  // 反选：排除包含关键词的记录
+  let r = E.filterRecords(recs, { '编号': { type: 'ids', value: ['B1', 'B3'], exclude: true } });
+  assert.deepStrictEqual(r.map((x) => x.id).sort(), ['B2']);
+  r = E.filterRecords(recs, { '编号': { type: 'ids', value: ['B'], exclude: true } });
+  assert.strictEqual(r.length, 0); // 全部命中关键词 → 全排除
+  r = E.filterRecords(recs, { '编号': { type: 'ids', value: ['B9'], exclude: true } });
+  assert.strictEqual(r.length, 3); // 无命中 → 全保留
+  r = E.filterRecords(recs, { '编号': { type: 'ids', value: [], exclude: true } });
+  assert.strictEqual(r.length, 3); // 空列表不过滤
+});
+
+test('动态筛选：长文本列多关键词模糊 + 反选（kwlist，v1.44.0）', () => {
+  const s = E.emptyState('1.0.0');
+  E.applyImport(s, [
+    row('B1', { '标题': '登录超时', '退回原因': '环境未就绪' }),
+    row('B2', { '标题': 'Login Fail', '退回原因': '缺少日志' }),
+    row('B3', { '标题': '导出乱码', '退回原因': '环境未就绪' })
+  ], '2026-08-12T09:00:00');
+  const recs = Object.values(s.bugs);
+  // 多关键词：任一命中即通过
+  let r = E.filterRecords(recs, { '标题': { type: 'kwlist', value: ['超时', '乱码'] } });
+  assert.deepStrictEqual(r.map((x) => x.id).sort(), ['B1', 'B3']);
+  // 大小写不敏感
+  r = E.filterRecords(recs, { '标题': { type: 'kwlist', value: ['login'] } });
+  assert.deepStrictEqual(r.map((x) => x.id), ['B2']);
+  // 反选：排除命中
+  r = E.filterRecords(recs, { '标题': { type: 'kwlist', value: ['超时'], exclude: true } });
+  assert.deepStrictEqual(r.map((x) => x.id).sort(), ['B2', 'B3']);
+  // 空列表不过滤
+  r = E.filterRecords(recs, { '标题': { type: 'kwlist', value: [], exclude: true } });
+  assert.strictEqual(r.length, 3);
+  // 只匹配本字段：关键词 == 记录 id（标题里没有）→ 0 命中（区别于编号列的 ids 类型）
+  r = E.filterRecords(recs, { '标题': { type: 'kwlist', value: ['B2'] } });
+  assert.strictEqual(r.length, 0);
+  // 与既有 text 类型并存（旧语义不回归）：单关键词包含匹配
+  r = E.filterRecords(recs, { '退回原因': { type: 'text', value: '环境' } });
+  assert.deepStrictEqual(r.map((x) => x.id).sort(), ['B1', 'B3']);
+  // 多列组合（AND）
+  r = E.filterRecords(recs, {
+    '标题': { type: 'kwlist', value: ['超时', '乱码'] },
+    '退回原因': { type: 'kwlist', value: ['环境未就绪'] }
+  });
+  assert.deepStrictEqual(r.map((x) => x.id).sort(), ['B1', 'B3']);
+});
+
+test('统计：责任人 maxDays = 停留天数最大值（v1.42.0）', () => {
+  const s = E.emptyState('1.0.0');
+  E.applyImport(s, [
+    row('B1', { '当前责任人': '张三', '停留天数': '6' }),
+    row('B2', { '当前责任人': '张三', '停留天数': '3' }),
+    row('B3', { '当前责任人': '李四', '停留天数': '10' }),
+    row('B4', { '当前责任人': '李四', '停留天数': '' })
+  ], '2026-08-12T09:00:00');
+  const st = E.computeStats(s, 5);
+  assert.strictEqual(st.byOwner['张三'].maxDays, 6);   // 6 > 3
+  assert.strictEqual(st.byOwner['李四'].maxDays, 10);  // 空停留天数忽略
+  assert.strictEqual(st.byOwner['张三'].overdue, 1);   // 超期数量不受影响（仅 6 ≥ 5）
+});
+
 // ---------- 多版本筛选（v1.6.0） ----------
 test('多版本筛选：computeStats 支持数组（任一匹配）', () => {
   const s = E.emptyState('1.0.0');
@@ -1152,6 +1219,41 @@ test('updateStatus：当天有快照时手动关闭计入当天快照（今日�
   E.updateStatus(s, 'B1', '关闭', '2026-08-12T10:00:00', 'jim');
   assert.strictEqual(s.snapshots[0].solved, 1, '当天快照 solved +1');
   assert.strictEqual(E.todayStats(s, new Date('2026-08-12T20:00:00')).solved, 1);
+});
+
+// ---------- v1.45.0：导入批次 id 列表 + idset 筛选 ----------
+test('applyImport：返回 importedIds / reactivatedIds（v1.45.0）', () => {
+  const s = E.emptyState('1.0.0');
+  let r = E.applyImport(s, [row('B1'), row('B2')], '2026-08-12T09:00:00');
+  assert.deepStrictEqual(r.importedIds.slice().sort(), ['B1', 'B2'], '首次导入 id 列表');
+  assert.deepStrictEqual(r.reactivatedIds, [], '首次导入无重新激活');
+  // 第二次：B2 消失 → 判定解决
+  r = E.applyImport(s, [row('B1')], '2026-08-13T09:00:00');
+  assert.deepStrictEqual(r.importedIds, [], '第二次无新增');
+  assert.deepStrictEqual(r.solvedIds, ['B2'], 'B2 判定解决');
+  // 第三次：B2 回来 → 重新激活
+  r = E.applyImport(s, [row('B1'), row('B2')], '2026-08-14T09:00:00');
+  assert.deepStrictEqual(r.importedIds, [], '第三次无新增');
+  assert.deepStrictEqual(r.reactivatedIds, ['B2'], 'B2 重新激活 id 列表');
+});
+
+test('filterRecords：idset 按 id 集合精确匹配（v1.45.0）', () => {
+  const s = E.emptyState('1.0.0');
+  E.applyImport(s, [row('B1'), row('B2'), row('B3')], '2026-08-12T09:00:00');
+  const recs = Object.keys(s.bugs).map((id) => s.bugs[id]);
+  const out = E.filterRecords(recs, { __importBatch: { type: 'idset', value: ['B1', 'B3'] } });
+  assert.strictEqual(out.length, 2, '命中 2 条');
+  assert.deepStrictEqual(out.map((r) => r.id).sort(), ['B1', 'B3']);
+  // 与其它筛选组合：idset + 责任人枚举（AND 关系）
+  const both = E.filterRecords(recs, {
+    __importBatch: { type: 'idset', value: ['B1', 'B3'] },
+    '当前责任人': { type: 'enum', value: ['张三'] }
+  });
+  assert.strictEqual(both.length, 2, '组合筛选（同为张三）');
+  // 空集合与其他类型一致：视为不过滤
+  assert.strictEqual(E.filterRecords(recs, { __importBatch: { type: 'idset', value: [] } }).length, 3);
+  // 不存在的 id → 0 条
+  assert.strictEqual(E.filterRecords(recs, { __importBatch: { type: 'idset', value: ['NOPE'] } }).length, 0);
 });
 
 console.log(`\n结果：${passed} 通过, ${failed} 失败\n`);

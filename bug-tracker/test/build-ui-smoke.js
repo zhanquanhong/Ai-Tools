@@ -127,6 +127,112 @@ setTimeout(() => {
     check('弹层清除全部 → 恢复 3 行', document.querySelectorAll('#bugTbody tr').length === 3);
     document.querySelector('#btnClearFilters').click();
     check('清除筛选 → 3 行', document.querySelectorAll('#bugTbody tr').length === 3);
+
+    // ===== v1.44.0：长文本列「多关键词模糊 + 反选」 =====
+    document.querySelector('#bugThead .f-icon[data-col="标题"]').click();
+    check('标题筛选弹层：关键词输入框存在', !!document.querySelector('#fpKw'));
+    check('标题筛选弹层：反选勾选框存在', !!document.querySelector('#fpKwExclude'));
+    check('标题筛选弹层：支持多关键词提示', document.querySelector('#filterPop').textContent.indexOf('多个关键词') !== -1);
+    document.querySelector('#fpKw').value = '登录, 按钮';   // 任一命中：B1 登录失败 / B4 新BUG-按钮无效
+    document.querySelector('#fpOk').click();
+    check('标题多关键词（任一命中）→ 2 行', document.querySelectorAll('#bugTbody tr').length === 2);
+    document.querySelector('#bugThead .f-icon[data-col="标题"]').click();
+    check('标题筛选回填关键词', document.querySelector('#fpKw').value === '登录, 按钮');
+    check('标题筛选回填反选状态', document.querySelector('#fpKwExclude').checked === false);
+    document.querySelector('#fpKwExclude').checked = true;
+    document.querySelector('#fpOk').click();
+    check('标题反选（排除命中）→ 1 行', document.querySelectorAll('#bugTbody tr').length === 1);
+    document.querySelector('#btnClearFilters').click();
+    check('清除标题筛选 → 3 行', document.querySelectorAll('#bugTbody tr').length === 3);
+
+    // ===== v1.45.0：导入结果面板「新增 / 重新激活」点击 → 跳转 BUG 列表 =====
+    window.__bugtrackerShowImportResult({
+      totalCount: 2, rawCount: 2, imported: 2, existingCount: 0, solved: 0, reactivated: 0,
+      ownerChanges: 0, ownerSkipped: 0, versionChanges: [], solvedIds: [],
+      importedIds: ['B4', 'B1'], reactivatedIds: [],
+      skippedRows: [], cleanedIds: [], warnings: []
+    });
+    const nAddEl45 = document.querySelector('#importResult .num-jump[data-jump-batch="add"]');
+    check('导入面板：新增数字可点击', !!nAddEl45);
+    check('导入面板：重新激活 0 条 → 不可点', !document.querySelector('#importResult .num-jump[data-jump-batch="react"]'));
+    nAddEl45.click();
+    check('点击「新增」→ 切换 BUG 列表视图', document.querySelector('#view-list').style.display !== 'none');
+    check('点击「新增」→ 仅显示这批 BUG（2 行）', document.querySelectorAll('#bugTbody tr').length === 2);
+    const srcTag45 = document.querySelector('#filterSrcTag');
+    check('来源标签：本次导入·新增 2', !!srcTag45 && !srcTag45.classList.contains('hidden') && srcTag45.textContent.indexOf('本次导入·新增') !== -1 && srcTag45.textContent.indexOf('2') !== -1);
+    srcTag45.click();
+    check('来源标签 ✕ → 清除该筛选（恢复 3 行）', document.querySelectorAll('#bugTbody tr').length === 3 && document.querySelector('#filterSrcTag').classList.contains('hidden'));
+    window.__bugtrackerShowImportResult({
+      totalCount: 1, rawCount: 1, imported: 0, existingCount: 1, solved: 0, reactivated: 1,
+      ownerChanges: 0, ownerSkipped: 0, versionChanges: [], solvedIds: [],
+      importedIds: [], reactivatedIds: ['B3'],
+      skippedRows: [], cleanedIds: [], warnings: []
+    });
+    const nReEl45 = document.querySelector('#importResult .num-jump[data-jump-batch="react"]');
+    check('导入面板：重新激活数字可点击', !!nReEl45);
+    nReEl45.click();
+    check('点击「重新激活」→ 仅显示该 BUG（1 行）', document.querySelectorAll('#bugTbody tr').length === 1);
+    check('来源标签：本次导入·重新激活 1', document.querySelector('#filterSrcTag').textContent.indexOf('本次导入·重新激活') !== -1);
+    document.querySelector('#btnClearFilters').click();
+    check('清除筛选 → 恢复 3 行（来源标签消失）', document.querySelectorAll('#bugTbody tr').length === 3 && document.querySelector('#filterSrcTag').classList.contains('hidden'));
+
+    // ===== v1.45.0：当前责任人「搜索框 + 复选列表」多选 =====
+    document.querySelector('#bugThead .f-icon[data-col="当前责任人"]').click();
+    const popOwner45 = document.querySelector('#filterPop');
+    check('责任人弹层：搜索框存在', !!document.querySelector('#fpOwnerSearch') && vis(document.querySelector('#fpOwnerSearch')));
+    check('责任人弹层：复选列表存在（滚动）', !!document.querySelector('#fpOwnerOpts') && document.querySelector('#fpOwnerOpts').classList.contains('scroll'));
+    document.querySelector('#fpOwnerSearch').value = '张';
+    document.querySelector('#fpOwnerSearch').dispatchEvent(new Event('input'));
+    const visLbl45 = Array.from(document.querySelectorAll('#fpOwnerOpts label')).filter((l) => !l.classList.contains('hidden'));
+    check('搜索「张」→ 仅张伟可见，王强被隐藏', visLbl45.length === 1 && visLbl45[0].dataset.name.indexOf('张') !== -1 && document.querySelector('#fpOwnerOpts label[data-name="王强"]').classList.contains('hidden'));
+    document.querySelector('#fpSelAll').click();
+    check('全选仅作用于当前搜索结果（1 项勾选）', document.querySelectorAll('#filterPop .filter-opts input:checked').length === 1);
+    document.querySelector('#fpOk').click();
+    check('筛选张伟 → 1 行（B3）', document.querySelectorAll('#bugTbody tr').length === 1);
+    check('责任人筛选信息：已筛选 1 列', document.querySelector('#filterInfo').textContent.indexOf('已筛选 1 列') !== -1);
+    document.querySelector('#bugThead .f-icon[data-col="当前责任人"]').click();
+    check('责任人弹层回填：已选 1 项（张伟）', document.querySelectorAll('#filterPop .filter-opts input:checked').length === 1);
+    document.querySelector('#fpSelNone').click();
+    const cbWang45 = Array.from(document.querySelectorAll('#filterPop .filter-opts input')).find((i) => i.value === '王强');
+    if (cbWang45) cbWang45.checked = true;
+    check('清空后可再次多选（王强 1 项）', document.querySelectorAll('#filterPop .filter-opts input:checked').length === 1);
+    document.querySelector('#fpOk').click();
+    check('改选王强 → 1 行（B1）', document.querySelectorAll('#bugTbody tr').length === 1 && document.querySelector('#bugTbody tr').textContent.indexOf('王强') !== -1);
+    document.querySelector('#btnClearFilters').click();
+    check('清除责任人筛选 → 3 行', document.querySelectorAll('#bugTbody tr').length === 3);
+
+    // ===== v1.44.0：文本列列宽拖拽真实生效 + 双击恢复默认 + 一键重置 =====
+    const thT44 = document.querySelector('#bugThead th:nth-child(1)');
+    check('标题列默认宽度 = 281（不受内容影响）', Math.round(thT44.getBoundingClientRect().width) === 281);
+    check('退回原因列默认宽度 = 281', Math.round(document.querySelector('#bugThead th:nth-child(12)').getBoundingClientRect().width) === 281);
+    const totalW44 = Math.round(document.getElementById('bugTable').getBoundingClientRect().width);
+    const rzh44 = thT44.querySelector('.th-resizer');
+    const rrect44 = thT44.getBoundingClientRect();
+    const rx44 = rrect44.right - 2;
+    const ry44 = rrect44.top + 10;
+    const md44 = new MouseEvent('mousedown', { bubbles: true, clientX: rx44, clientY: ry44 });
+    rzh44.dispatchEvent(md44);
+    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: rx44 + 200, clientY: ry44 }));
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: rx44 + 200, clientY: ry44 }));
+    check('拖宽标题列 +200 → 渲染宽度 481（真实生效）', Math.round(document.querySelector('#bugThead th:nth-child(1)').getBoundingClientRect().width) === 481);
+    check('拖宽后列宽已持久化', (JSON.parse(localStorage.getItem('bugtracker:colwidths') || '{}')['标题']) === 481);
+    check('拖宽后表格总宽变大', Math.round(document.getElementById('bugTable').getBoundingClientRect().width) > totalW44);
+    const rzh44b = document.querySelector('#bugThead th:nth-child(1) .th-resizer');
+    rzh44b.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    check('双击手柄 → 恢复默认 281', Math.round(document.querySelector('#bugThead th:nth-child(1)').getBoundingClientRect().width) === 281);
+    check('双击后持久化已清空该列', !JSON.parse(localStorage.getItem('bugtracker:colwidths') || '{}')['标题']);
+    const rzh44c = document.querySelector('#bugThead th:nth-child(12) .th-resizer');
+    const rrect44c = document.querySelector('#bugThead th:nth-child(12)').getBoundingClientRect();
+    rzh44c.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: rrect44c.right - 2, clientY: rrect44c.top + 10 }));
+    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: rrect44c.right - 2 + 150, clientY: rrect44c.top + 10 }));
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: rrect44c.right - 2 + 150, clientY: rrect44c.top + 10 }));
+    check('拖宽退回原因列 +150 → 431', Math.round(document.querySelector('#bugThead th:nth-child(12)').getBoundingClientRect().width) === 431);
+    check('「↺ 列宽」按钮存在', !!document.querySelector('#btnResetColW'));
+    document.querySelector('#btnResetColW').click();
+    check('一键重置 → 退回原因恢复 281', Math.round(document.querySelector('#bugThead th:nth-child(12)').getBoundingClientRect().width) === 281);
+    check('一键重置 → 持久化已清空', Object.keys(JSON.parse(localStorage.getItem('bugtracker:colwidths') || '{}')).length === 0);
+    const ga44 = document.querySelector('#globalAlert');
+    if (ga44) ga44.classList.add('hidden');
     // 复制编号整列
     let copiedText = '';
     try {
@@ -323,7 +429,7 @@ setTimeout(() => {
     check('colgroup 列数 = 15（14 字段 + 操作列）', document.querySelectorAll('#bugColgroup col').length === 15);
     check('列宽拖拽手柄数量 = 14', document.querySelectorAll('#bugThead .th-resizer').length === 14);
     check('列顺序：编号后紧跟严重程度、当前责任人', document.querySelectorAll('#bugThead th')[2].textContent.indexOf('编号') !== -1 && document.querySelectorAll('#bugThead th')[3].textContent.indexOf('严重程度') !== -1 && document.querySelectorAll('#bugThead th')[4].textContent.indexOf('当前责任人') !== -1);
-    check('默认无固定列宽（auto 布局）', document.querySelectorAll('#bugColgroup col')[2].style.width === '');
+    check('默认列宽取自默认宽度表（v1.44.0 fixed 布局）', document.querySelectorAll('#bugColgroup col')[2].style.width === '141px' && document.querySelectorAll('#bugColgroup col')[0].style.width === '281px');
     check('操作列按钮全部可见', Array.from(document.querySelectorAll('#bugTbody tr:first-child td:last-child .op-link')).every(el => el.offsetWidth > 0 && el.offsetHeight > 0));
     check('操作列按钮数量 = 4', document.querySelectorAll('#bugTbody tr:first-child td:last-child .op-link').length === 4);
     const wrapRect0 = document.querySelector('.table-wrap').getBoundingClientRect();
