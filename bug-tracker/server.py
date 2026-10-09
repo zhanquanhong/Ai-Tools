@@ -26,6 +26,9 @@ import zipfile
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse
 
+from login_guard import LoginGuardError, guard  # 登录防护（账号锁定 + IP 限流）
+import notifier  # 超期提醒（飞书推送，v1.46.0）
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 STATE_FILE = os.path.join(DATA_DIR, 'state.json')
@@ -42,7 +45,7 @@ BACKUP_LOG_FILE = os.path.join(DATA_DIR, 'backup-log.json')
 BACKUP_KEEP_DAYS = 7          # 备份保留 7 天，超过自动清理
 BACKUP_META_FILE = os.path.join(DATA_DIR, 'backup-meta.json')
 # 参与版本备份/回滚的代码文件（不含 data/ 用户数据、test/、backup/ 自身）
-BACKUP_PATHS = ['index.html', 'server.py', 'auth.json', 'css', 'js', 'vendor']
+BACKUP_PATHS = ['index.html', 'server.py', 'notifier.py', 'auth.json', 'css', 'js', 'vendor']
 
 
 def _code_hash():
@@ -477,6 +480,15 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             self._json(200, {'ok': True, 'backups': list_backups(), 'keep_days': BACKUP_KEEP_DAYS})
             return
+        if path == '/api/notify/config':
+            if not self._is_authed():
+                self._json(401, {'ok': False, 'error': '未登录或登录已过期'})
+                return
+            if not self._is_admin():
+                self._json(403, {'ok': False, 'error': '仅管理员可查看提醒配置'})
+                return
+            self._get_notify_config()
+            return
         # 页面：受保护，未登录跳登录页
         if not self._is_public(path):
             if not self._is_authed():
@@ -485,7 +497,6 @@ class Handler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 return
         super().do_GET()
-
     def do_POST(self):
         path = urlparse(self.path).path
         if path == API_LOGIN:
@@ -519,18 +530,39 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             self._json(200, {'ok': True, 'backup_id': backup_id, 'message': '备份完成：%s' % backup_id})
             return
+        if path in ('/api/notify/preview', '/api/notify/test'):
+            if not self._is_authed():
+                self._json(401, {'ok': False, 'error': '未登录或登录已过期'})
+                return
+            if not self._is_admin():
+                self._json(403, {'ok': False, 'error': '仅管理员可操作提醒推送'})
+                return
+            self._post_notify(dry_run=(path == '/api/notify/preview'))
+            return
         self.send_error(404, 'Not Found')
 
     # ---------- API：登录 ----------
     def _post_login(self):
+        # 读取 body（仅一次：登录防护检查与后续登录共用，防二次读取空流）
+        data = None
         try:
             length = int(self.headers.get('Content-Length', 0))
             data = json.loads(self.rfile.read(length).decode('utf-8'))
-            user = str(data.get('user', ''))
-            pwd = str(data.get('pass', ''))
         except Exception:  # noqa: BLE001
+            data = None
+        # 登录防护：IP 限流 + 账号锁定检查（2026-09-05 生产实施，与 wbs-agent B1 一致）
+        ip = self.client_address[0]
+        user_probe = str(data.get('user', '')) if data else ''
+        try:
+            guard.check(user_probe, ip)
+        except LoginGuardError as exc:
+            self._json(exc.status, {'ok': False, 'error': exc.message})
+            return
+        if data is None:
             self._json(400, {'ok': False, 'error': '请求体无效'})
             return
+        user = str(data.get('user', ''))
+        pwd = str(data.get('pass', ''))
         # 常量时间比较，防时序攻击；多账号遍历匹配
         matched = None
         if not AUTH_ACCOUNTS:
@@ -544,8 +576,13 @@ class Handler(SimpleHTTPRequestHandler):
         # 记录登录请求：时间 / IP / 设备 / 账号 / 结果
         self._record_login(user, ok)
         if not ok:
-            self._json(401, {'ok': False, 'error': '账密错误'})
+            # 失败计数 → 达阈值锁定
+            if guard.record_fail(user):
+                self._json(423, {'ok': False, 'error': '失败次数过多，账号已锁定 15 分钟，请稍后再试'})
+            else:
+                self._json(401, {'ok': False, 'error': '账密错误'})
             return
+        guard.record_ok(user)
         role = matched['role']
         token = new_session(user, role)
         self.send_response(200)
@@ -727,6 +764,65 @@ class Handler(SimpleHTTPRequestHandler):
             print('[backup] 回滚操作日志写入失败: %s' % e, file=sys.stderr)
         self._json(200, {'ok': True, 'message': msg})
 
+    # ---------- API：超期提醒（飞书推送，v1.46.0） ----------
+    def _base_url(self):
+        """由请求 Host 推导站点地址（提醒卡片里的「打开看板」链接）。"""
+        host = self.headers.get('Host') or ('127.0.0.1:%d' % DEFAULT_PORT)
+        scheme = 'https' if self.headers.get('X-Forwarded-Proto') == 'https' else 'http'
+        return '%s://%s/' % (scheme, host)
+
+    def _get_notify_config(self):
+        """提醒配置（仅返回是否已配置与掩码，绝不回显 webhook 明文/密钥）。"""
+        cfg = notifier.load_config()
+        webhook = str(cfg.get('webhook') or '')
+        last = notifier.last_result()
+        self._json(200, {
+            'ok': True,
+            'enabled': bool(cfg.get('enabled')),
+            'time': cfg.get('time'),
+            'overdue_days': cfg.get('overdue_days'),
+            'severe_days': cfg.get('severe_days'),
+            'top_n': cfg.get('top_n'),
+            'has_webhook': bool(webhook),
+            'webhook_masked': notifier._mask_webhook(webhook),
+            'has_secret': bool(str(cfg.get('secret') or '')),
+            'last_sent_date': notifier.last_sent_date(),
+            'last_result': {
+                'time': last.get('time'), 'ok': last.get('ok'), 'err': last.get('err'),
+                'overdue': last.get('overdue'), 'reason': last.get('reason'),
+            } if last else None,
+        })
+
+    def _post_notify(self, dry_run=False):
+        """preview：只返回将推送的内容（不发送）；test：立即真实推送一次。"""
+        cfg = notifier.load_config()
+        state = notifier.load_state()
+        digest = notifier.build_digest(state, cfg, url=self._base_url())
+        if dry_run:
+            self._json(200, {
+                'ok': True, 'dry_run': True,
+                'title': digest['title'], 'markdown': digest['markdown'],
+                'stats': digest['stats'],
+                'has_webhook': bool(str(cfg.get('webhook') or '')),
+            })
+            return
+        if not str(cfg.get('webhook') or '').strip():
+            self._json(400, {'ok': False, 'error': '未配置飞书 webhook（环境变量 BT_FEISHU_WEBHOOK 或 data/notify.json），无法推送'})
+            return
+        ok, err = notifier.send_feishu(cfg, digest['title'], digest['markdown'])
+        cookie = self.headers.get('Cookie')
+        notifier.append_log({
+            'time': time.strftime('%Y-%m-%d %H:%M:%S'), 'reason': 'manual',
+            'ok': bool(ok), 'err': '' if ok else str(err),
+            'active': digest['stats'].get('active'), 'overdue': digest['stats'].get('overdue'),
+            'severe': digest['stats'].get('severe'),
+            'operator': session_user(parse_cookie(cookie)) or '',
+        })
+        if not ok:
+            self._json(502, {'ok': False, 'error': '推送失败：%s' % err})
+            return
+        self._json(200, {'ok': True, 'message': '已推送（超期 %s 条）' % digest['stats'].get('overdue'), 'stats': digest['stats']})
+
     # ---------- 工具 ----------
     def _json(self, code, obj):
         body = json.dumps(obj, ensure_ascii=False).encode('utf-8')
@@ -752,6 +848,8 @@ def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
     # 启动时自动备份（代码有变更才备份）+ 清理 7 天前旧备份
     auto_backup_if_changed()
+    # 超期提醒调度（v1.46.0）：未配置 webhook 时静默待命，配置后每分钟自检、到点推送
+    notifier.start_scheduler()
     server = ThreadingHTTPServer(('0.0.0.0', port), Handler)
     print('✅ BUG 跟踪共享服务器启动: http://0.0.0.0:%d' % port)
     print('   登录账号: %s' % '、'.join(a['user'] for a in AUTH_ACCOUNTS))

@@ -1,4 +1,4 @@
-# 🐞 BUG 处理进展跟踪系统 v1.41.0
+# 🐞 BUG 处理进展跟踪系统 v1.46.0
 
 用于跟踪管理开发团队每天的 BUG 处理进展：**新增多少、解决多少、谁在处理**。
 每天导入一次 BUG 列表（.xlsx/.csv），自动对比上次快照，统计新增/解决/重新激活，支持责任人改派、手动状态调整与全程追溯。
@@ -81,6 +81,15 @@
   - 备份列表展示版本号 / 来源 IP / 时间点，操作留痕写入 `data/backup-log.json`
 - **更新日志**：点击标题栏版本号查看（版本 + 日期时间 + 更新来源 IP），所有登录用户只读
 
+### 📨 超期提醒（飞书推送，v1.46.0）
+- **自动推送**：服务器每日定时（默认 **09:30**）向飞书群推送超期清单 —— 按责任人分组、停留天数降序，🔴 标注严重超期（≥14 天）、🟠 一般超期（≥7 天）；含活跃/超期/严重超期统计与「最近导入」新增·解决
+- **手动入口**：看板工具栏「📨 超期提醒」（仅管理员）→ 查看配置与上次发送结果、**预览推送内容**、**立即推送测试**
+- **配置方式（二选一，凭据不入库、界面不回显）**
+  - 环境变量（推荐）：`BT_FEISHU_WEBHOOK`（必填）、`BT_FEISHU_SECRET`（签名，可选）、`BT_NOTIFY_ENABLED`、`BT_NOTIFY_TIME`（HH:MM，默认 09:30）、`BT_NOTIFY_OVERDUE_DAYS`（默认 7）、`BT_NOTIFY_SEVERE_DAYS`（默认 14）、`BT_NOTIFY_TOP_N`（每组条数，默认 5）
+  - 配置文件 `data/notify.json`：`{"webhook":"","secret":"","enabled":true,"time":"09:30","overdue_days":7,"severe_days":14,"top_n":5,"max_groups":8,"url":"http://<域名或IP>:8092/"}`
+  - 配置后无需重启（调度每分钟自检）；发送记录见 `data/notify-log.json`（最多保留 200 条）
+- **未配置 webhook 时该功能静默待命**，不影响任何其他功能
+
 ---
 
 ## 三、数据存储说明
@@ -126,7 +135,8 @@
 
 ```
 bug-tracker/
-├── server.py              # Python 后端（认证/状态/备份回滚/更新日志 API）
+├── server.py              # Python 后端（认证/状态/备份回滚/更新日志/提醒 API）
+├── notifier.py            # 超期提醒（飞书推送：口径聚合/卡片渲染/签名/定时调度）
 ├── start_server.sh        # 启动脚本（端口 8092）
 ├── auth.json              # 账号配置（不入库，部署时自行配置）
 ├── index.html             # 主页面
@@ -140,7 +150,7 @@ bug-tracker/
 ├── vendor/
 │   ├── xlsx.full.min.js   # Excel 解析（本地化，无需外网）
 │   └── echarts.min.js     # 趋势图表（本地化，无需外网）
-├── data/                  # 运行数据（不入库）：state.json / changelog.json / 登录记录 / 备份日志
+├── data/                  # 运行数据（不入库）：state.json / changelog.json / 登录记录 / 备份日志 / notify.json / notify-log.json
 ├── backup/                # 版本备份 zip（不入库，自动保留最近 7 天）
 ├── sample-示例BUG列表.xlsx # 示例导入文件（演示字段格式）
 └── test/
@@ -162,6 +172,11 @@ node test/storage.test.js     # 存储用例
 
 # 版本管理测试（Python 环境）
 python3 test/test_backup.py
+python3 -m pytest test/test_notifier.py test/test_notify_api.py   # 超期提醒（口径/签名/发送/API）
+
+# 超期提醒内容预览（只读，不发送）
+python3 notifier.py          # 预览
+python3 notifier.py send     # 立即推送一次（需已配置 webhook）
 
 # UI 冒烟测试（需 Chrome）
 node test/build-ui-smoke.js

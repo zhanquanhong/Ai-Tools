@@ -349,6 +349,14 @@ th[data-sort] .sort-mark { color:#e85418; }
 /* v1.45.0：责任人列搜索多选 */
 .filter-opts.scroll { max-height:260px; }
 .filter-hint { font-size:11px; color:#989898; margin:-2px 0 8px; }
+/* v1.46.0：超期提醒弹层 */
+.notify-status { font-size:13px; margin-bottom:10px; }
+.notify-row { display:flex; gap:10px; padding:4px 0; border-bottom:1px dashed #f0f0f0; }
+.notify-row > span { color:#787878; min-width:88px; }
+.notify-row > b { color:#1f2329; font-weight:600; }
+.notify-preview { white-space:pre-wrap; font-family:inherit; font-size:12.5px; line-height:1.75; background:#fcf8f0; border:1px solid #f0e8dc; border-radius:8px; padding:12px 14px; margin:0 0 12px; color:#1f2329; max-height:46vh; overflow:auto; }
+.notify-preview:empty { display:none; }
+.notify-hint { font-size:11px; color:#989898; margin-top:8px; }
 
 .footer { text-align:center; color:#b0b0b0; font-size:11px; margin:14px 0 6px; }
 

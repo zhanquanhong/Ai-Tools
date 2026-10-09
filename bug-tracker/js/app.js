@@ -5,7 +5,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.45.0';
+  const APP_VERSION = '1.46.0';
   // 更新日志从后端 API 拉取（data/changelog.json），不再硬编码在前端
   let CHANGELOG = [];
   // 历史更新日志已迁移至 data/changelog.json（63 条，v1.0.0 ~ v1.33.1），由 /api/changelog 提供
@@ -197,6 +197,8 @@
     if (navImport) navImport.style.display = isAdmin ? '' : 'none';
     const navVersions = $('.nav-item[data-view="versions"]');
     if (navVersions) navVersions.style.display = isAdmin ? '' : 'none';
+    const btnNotify = $('#btnNotify');   // v1.46.0：超期提醒（仅管理员）
+    if (btnNotify) btnNotify.style.display = isAdmin ? '' : 'none';
     if (!isAdmin && currentView === 'import') switchView('dashboard');
     if (!isAdmin && currentView === 'versions') switchView('dashboard');
   }
@@ -1532,6 +1534,72 @@
     };
   }
 
+  // ---------- 超期提醒（v1.46.0，飞书推送，仅管理员） ----------
+  async function openNotifyModal() {
+    $('#notifyModal').classList.remove('hidden');
+    const pre = $('#notifyPreview');
+    if (pre) pre.textContent = '';
+    await refreshNotifyStatus();
+  }
+
+  async function refreshNotifyStatus() {
+    const box = $('#notifyStatus');
+    if (!box) return;
+    box.textContent = '加载中…';
+    try {
+      const res = await fetch('/api/notify/config', { cache: 'no-store', credentials: 'same-origin' });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        box.innerHTML = `<span style="color:#b33a3a">读取失败：${escapeHtml(data.error || ('HTTP ' + res.status))}</span>`;
+        return;
+      }
+      const last = data.last_result;
+      const lastTxt = last
+        ? `${escapeHtml(last.time || '')} · ${last.ok ? '✅ 成功' : '❌ 失败'}${last.ok ? '' : (last.err ? `（${escapeHtml(last.err)}）` : '')}`
+        : '暂无记录';
+      const stateTxt = data.has_webhook ? (data.enabled ? '已启用' : '已配置，但未启用') : '未配置 webhook';
+      box.innerHTML = `
+        <div class="notify-row"><span>状态</span><b>${stateTxt}</b></div>
+        <div class="notify-row"><span>每日推送</span><b>${escapeHtml(String(data.time))}</b></div>
+        <div class="notify-row"><span>阈值</span><b>超期 ≥${data.overdue_days} 天 · 严重 ≥${data.severe_days} 天 · 每组前 ${data.top_n} 条</b></div>
+        <div class="notify-row"><span>上次发送</span><b>${lastTxt}</b></div>
+        ${data.has_webhook ? `<div class="notify-row"><span>Webhook</span><code>${escapeHtml(data.webhook_masked || '')}</code></div>` : ''}`;
+    } catch (e) {
+      box.innerHTML = `<span style="color:#b33a3a">读取失败：${escapeHtml(e.message)}</span>`;
+    }
+  }
+
+  async function previewNotify() {
+    const pre = $('#notifyPreview');
+    if (!pre) return;
+    pre.textContent = '生成中…';
+    try {
+      const res = await fetch('/api/notify/preview', { method: 'POST', cache: 'no-store', credentials: 'same-origin' });
+      const data = await res.json();
+      if (!res.ok || !data.ok) { pre.textContent = '生成失败：' + (data.error || ('HTTP ' + res.status)); return; }
+      pre.textContent = `${data.title}\n\n${data.markdown}`;
+    } catch (e) {
+      pre.textContent = '生成失败：' + e.message;
+    }
+  }
+
+  async function sendNotify() {
+    if (!confirm('确定立即向飞书推送一次超期提醒？')) return;
+    const btn = $('#btnNotifySend');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch('/api/notify/test', { method: 'POST', cache: 'no-store', credentials: 'same-origin' });
+      const data = await res.json();
+      const ok = res.ok && data.ok;
+      showAlert(ok ? (data.message || '已推送') : ('推送失败：' + (data.error || ('HTTP ' + res.status))), !ok);
+      await refreshNotifyStatus();
+    } catch (e) {
+      showAlert('推送失败：' + e.message, true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   // ---------- 改派 ----------
   function renderReassignOptions(filter) {
     const kw = (filter || '').trim().toLowerCase();
@@ -2358,6 +2426,10 @@
     });
     // 问题统计弹窗（v1.33.0）
     $('#btnStatsModal').addEventListener('click', openStatsModal);
+    // 超期提醒（v1.46.0，仅管理员可见）
+    $('#btnNotify').addEventListener('click', openNotifyModal);
+    $('#btnNotifyPreview').addEventListener('click', previewNotify);
+    $('#btnNotifySend').addEventListener('click', sendNotify);
     $('#btnStatsCopy').addEventListener('click', () => {
       const text = $('#statsText').textContent;
       const done = () => {

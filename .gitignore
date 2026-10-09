@@ -7,3 +7,5 @@ bug-tracker/data/backup-log.json
 bug-tracker/data/backup-meta.json
 bug-tracker/__pycache__/
 *.pyc
+bug-tracker/data/notify.json
+bug-tracker/data/notify-log.json

@@ -733,6 +733,55 @@ setTimeout(() => {
   document.title = results.filter(r => r.startsWith('FAIL') || r.startsWith('EXCEPTION')).length === 0 ? 'SMOKE-ALL-PASS' : 'SMOKE-FAIL';
   document.body.insertAdjacentHTML('beforeend', '<div id="smokeResults" style="position:fixed;bottom:0;left:0;background:#111;color:#0f0;padding:10px;font:12px monospace;z-index:9999;white-space:pre">' + results.join('\\n') + '</div>');
 }, 800);
+
+// ===== v1.46.0：超期提醒（异步阶段：需等待 fetch mock 的 Promise 落地）=====
+setTimeout(async () => {
+  const vis = (el) => !!el && el.offsetWidth > 0 && el.offsetHeight > 0 && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0;
+  try {
+    const origFetch = window.fetch;
+    window.fetch = (url, opts) => {
+      const u = String(url);
+      if (u.indexOf('/api/notify/config') === 0) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({
+          ok: true, enabled: true, time: '09:30', overdue_days: 7, severe_days: 14, top_n: 5,
+          has_webhook: true, webhook_masked: 'https://open***ffff', has_secret: true,
+          last_sent_date: '2026-10-08',
+          last_result: { time: '2026-10-08 09:30:00', ok: true, err: '', overdue: 62, reason: 'schedule' }
+        }) });
+      }
+      if (u.indexOf('/api/notify/preview') === 0) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({
+          ok: true, dry_run: true, title: 'BUG 超期提醒 · 2026-10-09',
+          markdown: '**活跃 BUG 218 条 · 超期(≥7天) 62 条（28.4%）**\\n\\n**张三**（2 条）\\n🟠 B1 · 停留 30 天 · 标题',
+          stats: { active: 218, overdue: 62 }
+        }) });
+      }
+      return origFetch(url, opts);
+    };
+    window.__bugtrackerApplyRole('user');
+    const btnU = document.querySelector('#btnNotify');
+    check('v1.46.0：普通用户隐藏「超期提醒」按钮', !!btnU && btnU.style.display === 'none');
+    window.__bugtrackerApplyRole('admin');
+    const btnA = document.querySelector('#btnNotify');
+    check('v1.46.0：管理员可见「超期提醒」按钮', !!btnA && btnA.style.display !== 'none' && vis(btnA));
+    btnA.click();
+    await new Promise((r) => setTimeout(r, 80));
+    const modal = document.querySelector('#notifyModal');
+    check('v1.46.0：提醒弹层打开且可见', !!modal && !modal.classList.contains('hidden') && vis(modal));
+    const stTxt = document.querySelector('#notifyStatus').textContent;
+    check('v1.46.0：弹层显示推送配置（时间/上次发送/掩码）', stTxt.indexOf('每日推送') !== -1 && stTxt.indexOf('09:30') !== -1 && stTxt.indexOf('上次发送') !== -1 && stTxt.indexOf('open***ffff') !== -1);
+    document.querySelector('#btnNotifyPreview').click();
+    await new Promise((r) => setTimeout(r, 80));
+    const pv = document.querySelector('#notifyPreview').textContent;
+    check('v1.46.0：预览内容渲染（含超期统计与分组）', pv.indexOf('超期') !== -1 && pv.indexOf('张三') !== -1);
+    window.fetch = origFetch;
+  } catch (e) {
+    results.push('EXCEPTION | v1.46.0 notify: ' + e.message);
+  }
+  const div = document.getElementById('smokeResults');
+  if (div) div.textContent = results.join('\\n');
+  document.title = results.filter((r) => r.startsWith('FAIL') || r.startsWith('EXCEPTION')).length === 0 ? 'SMOKE-ALL-PASS' : 'SMOKE-FAIL';
+}, 900);
 </script>
 <script>
 // 截图验证辅助：URL hash 指定初始视图（#list / #view-list / #people / #import / #loginrecords）。

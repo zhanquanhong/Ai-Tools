@@ -1,5 +1,15 @@
 [
   {
+    "ver": "1.46.0",
+    "date": "2026-10-09 23:05",
+    "source_ip": "106.14.137.133",
+    "items": [
+      "新增「超期/停滞 BUG 自动提醒（飞书推送）」：服务器每日定时（默认 09:30）推送超期清单，按责任人分组、停留天数降序，标注严重超期（≥14 天）",
+      "看板新增「📨 超期提醒」（仅管理员）：查看推送配置与上次发送结果、预览推送内容、立即推送测试",
+      "提醒配置：环境变量 BT_FEISHU_WEBHOOK / BT_FEISHU_SECRET / BT_NOTIFY_ENABLED / BT_NOTIFY_TIME / BT_NOTIFY_OVERDUE_DAYS / BT_NOTIFY_SEVERE_DAYS / BT_NOTIFY_TOP_N 或 data/notify.json（凭据不入库、界面不回显）"
+    ]
+  },
+  {
     "ver": "1.45.0",
     "date": "2026-10-09 18:10",
     "source_ip": "106.14.137.133",

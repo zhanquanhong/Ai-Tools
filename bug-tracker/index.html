@@ -7,7 +7,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>BUG 处理进展跟踪</title>
-<link rel="stylesheet" href="css/style.css?v=1450">
+<link rel="stylesheet" href="css/style.css?v=1460">
 </head>
 <body>
 <div class="app">
@@ -99,6 +99,7 @@
         </div>
       </div>
       <span class="vfb-hint">支持多选版本，统计卡 / 严重程度 / 趋势 / 责任人维度 均按所选版本展示</span>
+      <button class="btn btn-sm" id="btnNotify" style="display:none">📨 超期提醒</button>
       <button class="btn btn-sm" id="btnStatsModal" style="margin-left:auto">📊 问题统计</button>
       <button class="btn btn-primary btn-sm" id="btnExportBugList">📤 导出问题清单</button>
     </div>
@@ -451,13 +452,29 @@
   </div>
 </div>
 
+<!-- ============ 模态框：超期提醒（飞书推送） ============ -->
+<div class="modal-mask hidden" id="notifyModal">
+  <div class="modal modal-lg">
+    <div class="modal-head"><h3>📨 超期提醒（飞书推送）</h3><span class="modal-close" data-close="notifyModal">✕</span></div>
+    <div class="modal-body">
+      <div id="notifyStatus" class="notify-status">加载中…</div>
+      <pre id="notifyPreview" class="notify-preview"></pre>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button class="btn btn-plain btn-sm" id="btnNotifyPreview">🔍 预览内容</button>
+        <button class="btn btn-primary btn-sm" id="btnNotifySend">📨 立即推送</button>
+      </div>
+      <div class="notify-hint">服务器每日定时自动推送（时间见上方）· 凭据在服务器配置，界面不回显密钥</div>
+    </div>
+  </div>
+</div>
+
 <!-- 列筛选弹层 -->
 <div class="filter-pop hidden" id="filterPop"></div>
 
 <script src="vendor/echarts.min.js"></script>
-<script src="js/engine.js?v=1450"></script>
-<script src="js/storage.js?v=1450"></script>
-<script src="js/parser.js?v=1450"></script>
-<script src="js/app.js?v=1450"></script>
+<script src="js/engine.js?v=1460"></script>
+<script src="js/storage.js?v=1460"></script>
+<script src="js/parser.js?v=1460"></script>
+<script src="js/app.js?v=1460"></script>
 </body>
 </html>
