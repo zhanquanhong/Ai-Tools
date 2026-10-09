@@ -5,7 +5,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.47.0';
+  const APP_VERSION = '1.48.0';
   // 更新日志从后端 API 拉取（data/changelog.json），不再硬编码在前端
   let CHANGELOG = [];
   // 历史更新日志已迁移至 data/changelog.json（63 条，v1.0.0 ~ v1.33.1），由 /api/changelog 提供
@@ -836,6 +836,10 @@
     renderTrend(verList);
     renderMonthStats(verList);
 
+    // v1.48.0：环比对比 + 版本解决率（口径与统计卡一致，跟随版本筛选）
+    renderCompare(verList);
+    renderVerRate(verList);
+
     // 责任人维度（按版本过滤）
     renderOwnerStats(stats);
   }
@@ -980,7 +984,7 @@
 
   function renderTrend(version) {
     const days = state.trendDays || 7;
-    const trend = Engine.trend7(state, new Date().toISOString(), days, version || '');
+    const trend = Engine.trendSeries(state, new Date().toISOString(), days, version || '');
     const el = $('#trendChart');
     if (!trendChart) {
       trendChart = echarts.init(el);
@@ -989,22 +993,98 @@
     const hasAny = trend.some((d) => d.hasData);
     // x 轴标签密度控制：天数多时每隔几天显示一个
     const labelStep = days > 14 ? Math.ceil(days / 14) : 1;
-    const axisLabels = trend.map((d, i) => (i % labelStep === 0 ? d.label : ''));
     trendChart.setOption({
       tooltip: { trigger: 'axis' },
-      legend: { data: ['新增', '解决'], top: 0, textStyle: { fontSize: 11 } },
+      legend: { data: ['新增', '解决', '净增'], top: 0, textStyle: { fontSize: 11 } },
       grid: { left: 40, right: 16, top: 30, bottom: 24 },
       xAxis: { type: 'category', data: trend.map((d) => d.label), axisLabel: { fontSize: 10, interval: labelStep - 1 } },
       yAxis: { type: 'value', minInterval: 1, axisLabel: { fontSize: 10 } },
       series: [
         { name: '新增', type: 'bar', data: trend.map((d) => d.hasData ? d.imported : null), itemStyle: { color: '#5ac2ff', borderRadius: [3, 3, 0, 0] }, barMaxWidth: days > 30 ? 10 : 18 },
-        { name: '解决', type: 'bar', data: trend.map((d) => d.hasData ? d.solved : null), itemStyle: { color: '#45bf82', borderRadius: [3, 3, 0, 0] }, barMaxWidth: days > 30 ? 10 : 18 }
+        { name: '解决', type: 'bar', data: trend.map((d) => d.hasData ? d.solved : null), itemStyle: { color: '#45bf82', borderRadius: [3, 3, 0, 0] }, barMaxWidth: days > 30 ? 10 : 18 },
+        { name: '净增', type: 'line', data: trend.map((d) => d.hasData ? d.net : null), symbol: 'circle', symbolSize: 5, lineStyle: { color: '#e85418', width: 2 }, itemStyle: { color: '#e85418' }, connectNulls: true, z: 3 }
       ],
       graphic: hasAny ? [] : [{
         type: 'text', left: 'center', top: 'middle', style: {
           text: '暂无数据\n请先导入 BUG 列表', textAlign: 'center', fill: '#b0b0b0', fontSize: 13
         }
       }]
+    });
+    // 区间汇总（v1.48.0）：累计新增 / 解决 / 净增 + 日均
+    const sumEl = $('#trendSummary');
+    if (sumEl) {
+      const imp = trend.reduce((a, d) => a + d.imported, 0);
+      const sol = trend.reduce((a, d) => a + d.solved, 0);
+      const net = imp - sol;
+      const activeDays = trend.filter((d) => d.hasData).length || 1;
+      sumEl.innerHTML = `近 ${days} 天：新增 <b class="ts-imp">${imp}</b> · 解决 <b class="ts-sol">${sol}</b> · 净增 <b class="ts-net ${net > 0 ? 'bad' : (net < 0 ? 'good' : '')}">${net > 0 ? '+' : ''}${net}</b>`
+        + ` · 日均 新增 ${(imp / activeDays).toFixed(1)} / 解决 ${(sol / activeDays).toFixed(1)}`;
+    }
+  }
+
+  /**
+   * 环比对比（v1.48.0）：本周 vs 上周同期 / 本月 vs 上月同期
+   * 颜色语义：新增↑ 橙（不乐观）、解决↑ 绿（好）、净增↑ 红（积压）
+   */
+  function renderCompare(version) {
+    const box = $('#compareBlock');
+    if (!box) return;
+    const now = new Date().toISOString();
+    const cells = ['week', 'month'].map((p) => Engine.periodCompare(state, now, p, version || ''));
+    const arrow = (d) => (d > 0 ? '▲ +' + d : (d < 0 ? '▼ ' + d : '— 0'));
+    const rateTxt = (c, p, r) => (r == null ? '（上期 0，无法计算）' : `（${r > 0 ? '+' : ''}${r}%）`);
+    const rowCls = (key, d) => {
+      if (d === 0) return '';
+      if (key === 'solved') return d > 0 ? 'good' : 'bad';
+      return d > 0 ? 'bad' : 'good';      // 新增/净增 上升 = 不乐观
+    };
+    const rowsOf = (c) => {
+      const items = [
+        { key: 'imported', label: '新增', cur: c.current.imported, prev: c.previous.imported, d: c.delta.imported, r: c.rate.imported },
+        { key: 'solved', label: '解决', cur: c.current.solved, prev: c.previous.solved, d: c.delta.solved, r: c.rate.solved },
+        { key: 'net', label: '净增', cur: c.current.net, prev: c.previous.net, d: c.delta.net, r: c.rate.net }
+      ];
+      return items.map((it) => `<div class="cmp-row">
+        <span class="cmp-k">${it.label}</span>
+        <b>${it.key === 'net' && it.cur > 0 ? '+' : ''}${it.cur}</b>
+        <i class="${rowCls(it.key, it.d)}">${arrow(it.d)} ${rateTxt(it.cur, it.prev, it.r)}</i>
+        <span class="cmp-prev">上期 ${it.prev}</span>
+      </div>`).join('');
+    };
+    box.innerHTML = cells.map((c) => `<div class="cmp-card" data-period="${c.period}">
+      <div class="cmp-head">${c.current.label} <span class="cmp-sub">近 ${c.current.days} 天 · 对比 ${c.previous.label}（${c.previous.days} 天）</span></div>
+      ${rowsOf(c)}
+    </div>`).join('');
+  }
+
+  /** 版本解决率（v1.48.0）：按「发现发布」展示 解决率条 + 已修复/总数 */
+  function renderVerRate(version) {
+    const box = $('#verRateRows');
+    if (!box) return;
+    const rows = Engine.versionResolution(state, version || '');
+    const totalEl = $('#vrTotal');
+    if (!rows.length) {
+      box.innerHTML = '<div class="vrate-empty">暂无数据（未导入或当前版本筛选下无 BUG）</div>';
+      if (totalEl) totalEl.textContent = '';
+      return;
+    }
+    const tot = rows.reduce((a, r) => a + r.total, 0);
+    const sol = rows.reduce((a, r) => a + r.solved, 0);
+    const overall = tot ? Math.round(sol * 1000 / tot) / 10 : 0;
+    if (totalEl) totalEl.textContent = `整体解决率 ${overall}%（${sol}/${tot}）`;
+    box.innerHTML = rows.map((r) => `<div class="vrate-row" data-version="${escapeHtml(r.version)}" title="点击筛选该版本">
+      <span class="vr-name">${escapeHtml(r.version)}</span>
+      <span class="vr-bar"><i style="width:${r.rate}%"></i></span>
+      <span class="vr-num"><b>${r.rate}%</b> <em>已修复 ${r.solved} / ${r.total}${r.active ? ` · 未解决 ${r.active}` : ''}</em></span>
+    </div>`).join('');
+    // 点击某版本行 → 切换看板版本筛选（复用既有联动）
+    $$('#verRateRows .vrate-row').forEach((el) => {
+      el.onclick = () => {
+        const v = el.dataset.version;
+        state.dashboardVersions = [v];
+        save();
+        renderDashboard();
+      };
     });
   }
 

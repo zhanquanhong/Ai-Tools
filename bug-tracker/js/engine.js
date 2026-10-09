@@ -124,6 +124,102 @@
     return false;
   }
 
+  /**
+   * 趋势序列（v1.48.0）：逐日 新增 / 解决 / 净增
+   * 口径与统计卡完全一致（复用 sumDayStats，含当日手动关闭调整 dayAdj）
+   * @returns {Array<{date,label,imported,solved,net,hasData}>}
+   */
+  function trendSeries(state, now, days, version) {
+    const n = Math.max(1, Math.min(90, parseInt(days, 10) || 7));
+    const d = now ? new Date(now) : new Date();
+    const out = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const day = new Date(d.getFullYear(), d.getMonth(), d.getDate() - i);
+      const key = dayKeyOf(day);
+      const s = sumDayStats(state, key, version);
+      const imported = s.imported;
+      const solved = s.solved;
+      out.push({
+        date: key,
+        label: `${day.getMonth() + 1}-${day.getDate()}`,
+        imported,
+        solved,
+        net: imported - solved,
+        hasData: imported !== 0 || solved !== 0
+      });
+    }
+    return out;
+  }
+
+  /**
+   * 环比对比（v1.48.0）：本周 vs 上周同期 / 本月 vs 上月同期
+   * 「同期」= 上一周期起算同样的天数，避免月初/周一被整周期基数不公平比较；口径与统计卡一致
+   * @param {string} period 'week' | 'month'
+   */
+  function periodCompare(state, now, period, version) {
+    const d = now ? new Date(now) : new Date();
+    const isWeek = period === 'week';
+    let days;
+    let curStart;
+    let prevStart;
+    if (isWeek) {
+      const dow = (d.getDay() + 6) % 7;                    // 周一 = 0
+      days = dow + 1;
+      curStart = new Date(d.getFullYear(), d.getMonth(), d.getDate() - dow);
+      prevStart = new Date(curStart.getFullYear(), curStart.getMonth(), curStart.getDate() - 7);
+    } else {
+      days = d.getDate();
+      curStart = new Date(d.getFullYear(), d.getMonth(), 1);
+      prevStart = new Date(curStart.getFullYear(), curStart.getMonth() - 1, 1);
+    }
+    const sumRange = (start, n) => {
+      let imported = 0;
+      let solved = 0;
+      for (let i = 0; i < n; i++) {
+        const day = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+        const s = sumDayStats(state, dayKeyOf(day), version);
+        imported += s.imported;
+        solved += s.solved;
+      }
+      return { imported, solved, net: imported - solved };
+    };
+    const cur = sumRange(curStart, days);
+    const prev = sumRange(prevStart, days);
+    const pct = (c, p) => (p === 0 ? (c === 0 ? 0 : null) : Math.round((c - p) * 1000 / p) / 10);
+    return {
+      period: isWeek ? 'week' : 'month',
+      days,
+      current: Object.assign({ label: isWeek ? '本周' : '本月', start: dayKeyOf(curStart), days }, cur),
+      previous: Object.assign({ label: isWeek ? '上周同期' : '上月同期', start: dayKeyOf(prevStart), days }, prev),
+      delta: { imported: cur.imported - prev.imported, solved: cur.solved - prev.solved, net: cur.net - prev.net },
+      rate: { imported: pct(cur.imported, prev.imported), solved: pct(cur.solved, prev.solved), net: pct(cur.net, prev.net) }
+    };
+  }
+
+  /**
+   * 版本解决率（v1.48.0）：按「发现发布」统计 总数 / 已修复 / 未解决 / 解决率
+   * versions 为空 = 全部版本
+   */
+  function versionResolution(state, versions) {
+    const list = Array.isArray(versions) ? versions : (versions ? [versions] : []);
+    const inList = (v) => list.length === 0 || list.indexOf(v) !== -1;
+    const map = {};
+    Object.keys(state.bugs || {}).forEach((id) => {
+      const rec = state.bugs[id];
+      const v = (rec.fields['发现发布'] || '').trim() || '未标注';
+      if (!inList(v)) return;
+      if (!map[v]) map[v] = { version: v, total: 0, solved: 0, active: 0 };
+      map[v].total++;
+      if (isActive(rec)) map[v].active++;
+      else map[v].solved++;
+    });
+    return Object.keys(map).map((v) => {
+      const r = map[v];
+      r.rate = r.total ? Math.round(r.solved * 1000 / r.total) / 10 : 0;
+      return r;
+    }).sort((a, b) => b.total - a.total);
+  }
+
   /** 快照摘要（含版本维度明细，用于看板按版本筛选趋势） */
   function snapshotSummary(at, imported, solved, reactivated, totalActive, byVersion, versionCounts) {
     return { at, imported, solved, reactivated, totalActive, byVersion: byVersion || {}, versionCounts: versionCounts || {} };
@@ -1140,6 +1236,9 @@
     prevDayStats,
     sumDayStats,
     trend7,
+    trendSeries,
+    periodCompare,
+    versionResolution,
     monthStats,
     findAbnormalIds,
     detectCsvEncoding,

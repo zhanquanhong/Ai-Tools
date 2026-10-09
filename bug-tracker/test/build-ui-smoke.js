@@ -81,6 +81,19 @@ setTimeout(() => {
     check('严重程度 2 项(严重/轻微)', document.querySelectorAll('#sevStats .stat-item').length === 2);
     check('责任人维度 3 人', document.querySelectorAll('#ownerStats .person-row').length === 3);
     check('趋势图 canvas 渲染', !!document.querySelector('#trendChart canvas'));
+    // ===== v1.48.0：趋势净增汇总 + 环比对比 + 版本解决率 =====
+    const tsum = document.querySelector('#trendSummary');
+    check('v1.48.0：趋势图下显示区间汇总（新增/解决/净增/日均）',
+      !!tsum && vis(tsum) && tsum.textContent.indexOf('净增') !== -1 && tsum.textContent.indexOf('日均') !== -1);
+    const cmpCards = document.querySelectorAll('#compareBlock .cmp-card');
+    check('v1.48.0：环比对比 2 张卡（本周 / 本月）', cmpCards.length === 2 && vis(cmpCards[0]) && vis(cmpCards[1]));
+    const cmpTxt = document.querySelector('#compareBlock').textContent;
+    check('v1.48.0：环比卡含 新增/解决/净增 与 上期对比', ['新增', '解决', '净增', '上期'].every((k) => cmpTxt.indexOf(k) !== -1));
+    check('v1.48.0：环比卡标注「同期」口径', cmpTxt.indexOf('同期') !== -1);
+    const vrateRows = document.querySelectorAll('#verRateRows .vrate-row');
+    check('v1.48.0：版本解决率按版本列出行（V1.0 / V2.0）', vrateRows.length === 2 && vis(vrateRows[0]));
+    check('v1.48.0：版本解决率含百分比与已修复/总数',
+      /%/.test(document.querySelector('#verRateRows').textContent) && document.querySelector('#verRateRows').textContent.indexOf('已修复') !== -1);
     document.querySelector('.nav-item[data-view="list"]').click();
     check('列表显示 3 行', document.querySelectorAll('#bugTbody tr').length === 3);
     check('列表行含上次责任人(王强)', document.querySelector('#bugTbody tr').textContent.indexOf('王强') !== -1);

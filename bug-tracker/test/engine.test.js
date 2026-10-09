@@ -1332,5 +1332,90 @@ test('undoImport：无记录时返回错误（v1.47.0）', () => {
   assert.strictEqual(E.undoImport(s, undefined).ok, false);
 });
 
+// ---------- v1.48.0：趋势序列 / 环比对比 / 版本解决率 ----------
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+test('trendSeries：逐日 新增/解决/净增，且计入当日手动关闭（v1.48.0）', () => {
+  const s = E.emptyState('1.0.0');
+  E.applyImport(s, [row('B1'), row('B2')], '2026-08-12T09:00:00');
+  const t = E.trendSeries(s, new Date('2026-08-13T10:00:00'), 2);
+  assert.strictEqual(t.length, 2);
+  assert.strictEqual(t[0].date, '2026-08-12');
+  assert.strictEqual(t[0].imported, 2);
+  assert.strictEqual(t[0].solved, 0);
+  assert.strictEqual(t[0].net, 2);
+  assert.strictEqual(t[1].date, '2026-08-13');
+  assert.strictEqual(t[1].hasData, false, '无快照日不画点');
+  // 当日手动关闭（该日无快照）应计入「解决」，与统计卡口径一致
+  E.updateStatus(s, 'B1', '关闭', '2026-08-13T11:00:00', 'jim');
+  const t2 = E.trendSeries(s, new Date('2026-08-13T12:00:00'), 2);
+  assert.strictEqual(t2[1].solved, 1);
+  assert.strictEqual(t2[1].net, -1);
+  assert.strictEqual(t2[1].hasData, true);
+});
+
+test('periodCompare（周）：本周 vs 上周同期（v1.48.0）', () => {
+  const now = new Date('2026-08-19T15:00:00');
+  const dow = (now.getDay() + 6) % 7;                        // 周一=0
+  const curMon = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow);
+  const prevMon = new Date(curMon.getFullYear(), curMon.getMonth(), curMon.getDate() - 7);
+  const s = E.emptyState('1.0.0');
+  E.applyImport(s, [row('B1'), row('B2')], ymd(curMon) + 'T09:00:00');                 // 本周 +2
+  E.applyImport(s, [row('B1')], ymd(new Date(curMon.getTime() + 86400000)) + 'T09:00:00'); // B2 消失 → 本周解决 1
+  E.applyImport(s, [row('A1')], ymd(prevMon) + 'T09:00:00');                            // 上周同期 +1
+  const c = E.periodCompare(s, now, 'week');
+  assert.strictEqual(c.period, 'week');
+  assert.strictEqual(c.days, dow + 1, '本周已过天数');
+  assert.strictEqual(c.current.imported, 2);
+  assert.strictEqual(c.current.solved, 1);
+  assert.strictEqual(c.current.net, 1);
+  assert.strictEqual(c.previous.imported, 1);
+  assert.strictEqual(c.delta.imported, 1);
+  assert.strictEqual(c.rate.imported, 100, '1 → 2 = +100%');
+});
+
+test('periodCompare（月）：本月 vs 上月同期（7/1~7/19），区间外不计（v1.48.0）', () => {
+  const now = new Date('2026-08-19T15:00:00');
+  const s = E.emptyState('1.0.0');
+  E.applyImport(s, [row('B1')], '2026-08-05T09:00:00');       // 本月 +1
+  E.applyImport(s, [row('C1'), row('C2')], '2026-07-15T09:00:00');   // 上月同期 +2
+  E.applyImport(s, [row('D1')], '2026-07-25T09:00:00');       // 上月同期之后 → 不计
+  const c = E.periodCompare(s, now, 'month');
+  assert.strictEqual(c.days, 19);
+  assert.strictEqual(c.current.imported, 1);
+  assert.strictEqual(c.previous.imported, 2);
+  assert.strictEqual(c.delta.imported, -1);
+  assert.strictEqual(c.rate.imported, -50);
+  assert.strictEqual(c.previous.label, '上月同期');
+});
+
+test('periodCompare：上期为 0 → 变化率 null（无法计算）（v1.48.0）', () => {
+  const s = E.emptyState('1.0.0');
+  E.applyImport(s, [row('B1')], '2026-08-05T09:00:00');
+  const c = E.periodCompare(s, new Date('2026-08-19T15:00:00'), 'month');
+  assert.strictEqual(c.current.imported, 1);
+  assert.strictEqual(c.previous.imported, 0);
+  assert.strictEqual(c.rate.imported, null);
+});
+
+test('versionResolution：按版本 总数/已修复/解决率 + 版本过滤（v1.48.0）', () => {
+  const s = E.emptyState('1.0.0');
+  E.applyImport(s, [row('B1', { '发现发布': 'V1.0' }), row('B2', { '发现发布': 'V1.0' }), row('B3', { '发现发布': 'V2.0' })], '2026-08-12T09:00:00');
+  E.applyImport(s, [row('B1', { '发现发布': 'V1.0' })], '2026-08-13T09:00:00');   // B2 消失 → 解决
+  const all = E.versionResolution(s);
+  const v1 = all.find((r) => r.version === 'V1.0');
+  const v2 = all.find((r) => r.version === 'V2.0');
+  assert.strictEqual(v1.total, 2);
+  assert.strictEqual(v1.solved, 1);
+  assert.strictEqual(v1.active, 1);
+  assert.strictEqual(v1.rate, 50);
+  assert.strictEqual(v2.total, 1);
+  assert.strictEqual(v2.solved, 0);
+  assert.strictEqual(v2.rate, 0);
+  assert.strictEqual(all[0].version, 'V1.0', '按总数降序');
+  assert.strictEqual(E.versionResolution(s, ['V2.0']).length, 1, '版本过滤');
+  assert.strictEqual(E.versionResolution(s, []).length, 2, '空数组 = 全部');
+});
+
 console.log(`\n结果：${passed} 通过, ${failed} 失败\n`);
 process.exit(failed > 0 ? 1 : 0);

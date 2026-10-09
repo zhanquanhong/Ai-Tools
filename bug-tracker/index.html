@@ -7,7 +7,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>BUG 处理进展跟踪</title>
-<link rel="stylesheet" href="css/style.css?v=1470">
+<link rel="stylesheet" href="css/style.css?v=1480">
 </head>
 <body>
 <div class="app">
@@ -99,7 +99,7 @@
           </div>
         </div>
       </div>
-      <span class="vfb-hint">支持多选版本，统计卡 / 严重程度 / 趋势 / 责任人维度 均按所选版本展示</span>
+      <span class="vfb-hint">支持多选版本，统计卡 / 严重程度 / 趋势 / 环比 / 解决率 / 责任人维度 均按所选版本展示</span>
       <button class="btn btn-sm" id="btnNotify" style="display:none">📨 超期提醒</button>
       <button class="btn btn-sm" id="btnStatsModal" style="margin-left:auto">📊 问题统计</button>
       <button class="btn btn-primary btn-sm" id="btnExportBugList">📤 导出问题清单</button>
@@ -118,6 +118,16 @@
       </div>
     </div>
 
+    <div class="panel">
+      <h3>📈 环比对比 <span class="hint">口径与统计卡一致 · 「同期」= 上一周期起算相同天数</span></h3>
+      <div class="cmp-grid" id="compareBlock"></div>
+    </div>
+
+    <div class="panel">
+      <h3>✅ 版本解决率 <span class="tools" id="vrTotal"></span></h3>
+      <div id="verRateRows" class="vrate-list"></div>
+    </div>
+
     <div class="main">
       <div class="main-left">
         <div class="panel">
@@ -133,6 +143,7 @@
             </span>
           </h3>
           <div id="trendChart" class="chart"></div>
+          <div id="trendSummary" class="trend-summary"></div>
         </div>
         <div class="panel">
           <h3>📅 按月统计（建单）
@@ -473,9 +484,9 @@
 <div class="filter-pop hidden" id="filterPop"></div>
 
 <script src="vendor/echarts.min.js"></script>
-<script src="js/engine.js?v=1470"></script>
-<script src="js/storage.js?v=1470"></script>
-<script src="js/parser.js?v=1470"></script>
-<script src="js/app.js?v=1470"></script>
+<script src="js/engine.js?v=1480"></script>
+<script src="js/storage.js?v=1480"></script>
+<script src="js/parser.js?v=1480"></script>
+<script src="js/app.js?v=1480"></script>
 </body>
 </html>

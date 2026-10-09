@@ -380,6 +380,40 @@ th[data-sort] .sort-mark { color:#e85418; }
 .diff-block.b-re { border-color:#f5ecd6; } .diff-block.b-own { border-color:#f8e2d6; }
 .diff-more, .diff-note { font-size:11px; color:#989898; margin-top:4px; }
 .diff-warn { font-size:12px; color:#b33a3a; background:#fdeaea; border:1px solid #f0c4c4; border-radius:6px; padding:8px 10px; margin-top:6px; }
+/* v1.48.0：趋势汇总 / 环比对比 / 版本解决率 */
+.trend-summary { font-size:12px; color:#787878; margin-top:6px; }
+.trend-summary b { color:#1f2329; }
+.trend-summary b.ts-imp { color:#2b7fd4; }
+.trend-summary b.ts-sol { color:#2f9e63; }
+.trend-summary b.ts-net.bad { color:#e85418; }
+.trend-summary b.ts-net.good { color:#2f9e63; }
+.cmp-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.cmp-card { border:1px solid #f0f0f0; border-radius:10px; padding:10px 12px; background:#fcfcfd; }
+.cmp-head { font-size:13px; font-weight:600; color:#1f2329; margin-bottom:6px; }
+.cmp-sub { font-size:11px; color:#989898; font-weight:400; }
+.cmp-row { display:flex; align-items:center; gap:8px; font-size:12px; padding:3px 0; }
+.cmp-k { width:32px; color:#787878; }
+.cmp-row > b { min-width:34px; color:#1f2329; font-size:14px; }
+.cmp-row > i { font-style:normal; font-size:11px; color:#989898; }
+.cmp-row > i.good { color:#2f9e63; }
+.cmp-row > i.bad { color:#e85418; }
+.cmp-prev { margin-left:auto; font-size:11px; color:#b0b0b0; }
+.vrate-list { display:flex; flex-direction:column; gap:7px; }
+.vrate-row { display:flex; align-items:center; gap:10px; font-size:12px; cursor:pointer; padding:2px 4px; border-radius:6px; }
+.vrate-row:hover { background:#faf7f3; }
+.vr-name { width:132px; color:#484848; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.vr-bar { flex:1; height:9px; background:#f0f2f5; border-radius:5px; overflow:hidden; min-width:60px; }
+.vr-bar i { display:block; height:100%; background:linear-gradient(90deg,#45bf82,#2f9e63); border-radius:5px; }
+.vr-num { width:210px; text-align:right; color:#787878; white-space:nowrap; }
+.vr-num b { color:#2f9e63; }
+.vr-num em { font-style:normal; color:#989898; font-size:11px; }
+.vrate-empty { font-size:12px; color:#b0b0b0; padding:6px 0; }
+@media (max-width:768px) {
+  .cmp-grid { grid-template-columns:1fr; }
+  .cmp-prev { display:none; }
+  .vr-name { width:88px; }
+  .vr-num { width:auto; }
+}
 
 .footer { text-align:center; color:#b0b0b0; font-size:11px; margin:14px 0 6px; }
 
