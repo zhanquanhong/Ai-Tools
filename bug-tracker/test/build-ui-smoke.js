@@ -133,6 +133,23 @@ setTimeout(() => {
     check('v1.49.0：看板「📤 超期清单」按钮可见', vis(document.querySelector('#btnExportOverdue')));
     document.querySelector('#btnExportOverdue').click();
     check('v1.49.0：导出超期清单提示（按责任人分组）', document.querySelector('#globalAlert').textContent.indexOf('已导出超期清单') !== -1);
+    // ===== v1.50.0：周报/月报一键导出（含图表） =====
+    check('v1.50.0：看板「📄 周报/月报」按钮可见', vis(document.querySelector('#btnReport')));
+    document.querySelector('#btnReport').click();
+    check('v1.50.0：报告弹层打开（含 周报/月报 两个入口）',
+      !document.querySelector('#reportModal').classList.contains('hidden') && !!document.querySelector('#btnReportWeek') && !!document.querySelector('#btnReportMonth'));
+    document.querySelector('#reportModal .modal-close').click();
+    const repWeek = window.__bugtrackerBuildReport('week');
+    const repMonth = window.__bugtrackerBuildReport('month');
+    check('v1.50.0：周报 HTML 生成（标题/周期/口径说明）',
+      repWeek.indexOf('BUG 周报') !== -1 && repWeek.indexOf('同期') !== -1 && repWeek.indexOf('<!DOCTYPE html>') === 0);
+    check('v1.50.0：周报内联图表图片（base64 PNG 自包含）', repWeek.indexOf('<img class="chart" src="data:image/png;base64,') !== -1);
+    check('v1.50.0：周报含 版本解决率 / 责任人 TOP / 超期清单',
+      ['按版本解决率', '责任人 TOP', '超期清单'].every((k) => repWeek.indexOf(k) !== -1));
+    check('v1.50.0：月报标题与周期口径', repMonth.indexOf('BUG 月报') !== -1 && repMonth.indexOf('本月') !== -1);
+    check('v1.50.0：周报含 KPI 与打印提示', ['本期新增', '本期解决', '净增', '期末未解决', '打印'].every((k) => repWeek.indexOf(k) !== -1));
+    check('v1.50.0：报告不含外部依赖（无 http 外链资源）',
+      repWeek.indexOf('<link ') === -1 && repWeek.indexOf('src="http') === -1 && repWeek.indexOf("src='http") === -1);
     document.querySelector('.nav-item[data-view="list"]').click();
     check('列表显示 3 行', document.querySelectorAll('#bugTbody tr').length === 3);
     check('列表行含上次责任人(王强)', document.querySelector('#bugTbody tr').textContent.indexOf('王强') !== -1);

@@ -7,7 +7,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>BUG 处理进展跟踪</title>
-<link rel="stylesheet" href="css/style.css?v=1490">
+<link rel="stylesheet" href="css/style.css?v=1500">
 </head>
 <body>
 <div class="app">
@@ -102,6 +102,7 @@
       <span class="vfb-hint">支持多选版本，统计卡 / 严重程度 / 趋势 / 环比 / 解决率 / 责任人维度 均按所选版本展示</span>
       <button class="btn btn-sm" id="btnNotify" style="display:none">📨 超期提醒</button>
       <button class="btn btn-sm" id="btnExportOverdue" title="导出超期清单（按责任人分组，跟随版本筛选）">📤 超期清单</button>
+      <button class="btn btn-sm" id="btnReport" title="一键生成周报/月报（HTML，含图表，可直接打印为 PDF）">📄 周报/月报</button>
       <button class="btn btn-sm" id="btnStatsModal" style="margin-left:auto">📊 问题统计</button>
       <button class="btn btn-primary btn-sm" id="btnExportBugList">📤 导出问题清单</button>
     </div>
@@ -498,13 +499,38 @@
   </div>
 </div>
 
+<!-- ============ 模态框：周报 / 月报（v1.50.0） ============ -->
+<div class="modal-mask hidden" id="reportModal">
+  <div class="modal modal-sm">
+    <div class="modal-head"><h3>📄 生成报告</h3><span class="modal-close" data-close="reportModal">✕</span></div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:#787878;margin-bottom:12px">
+        生成自包含 HTML 报告（含趋势图、版本解决率、责任人 TOP、超期清单），可直接打开或<b>打印为 PDF</b>；周期按当前版本筛选口径。
+      </div>
+      <div class="dim-options">
+        <div class="dim-option" id="btnReportWeek">
+          <div class="dim-icon">📅</div>
+          <div><b>周报</b><div class="dim-sub">本周 vs 上周同期</div></div>
+        </div>
+        <div class="dim-option" id="btnReportMonth">
+          <div class="dim-icon">🗓️</div>
+          <div><b>月报</b><div class="dim-sub">本月 vs 上月同期</div></div>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-plain" data-close="reportModal">取消</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- 列筛选弹层 -->
 <div class="filter-pop hidden" id="filterPop"></div>
 
 <script src="vendor/echarts.min.js"></script>
-<script src="js/engine.js?v=1490"></script>
-<script src="js/storage.js?v=1490"></script>
-<script src="js/parser.js?v=1490"></script>
-<script src="js/app.js?v=1490"></script>
+<script src="js/engine.js?v=1500"></script>
+<script src="js/storage.js?v=1500"></script>
+<script src="js/parser.js?v=1500"></script>
+<script src="js/app.js?v=1500"></script>
 </body>
 </html>

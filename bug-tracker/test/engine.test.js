@@ -1460,5 +1460,48 @@ test('buildOverdueListText：按责任人分组 + 组内停留降序 + 指定责
   assert.ok(none.indexOf('（当前范围内无超期 BUG）') !== -1);
 });
 
+// ---------- v1.50.0：周报/月报数据模型 ----------
+test('reportModel：周报/月报模型（KPI/环比/趋势/版本/责任人/超期分组）（v1.50.0）', () => {
+  const s = E.emptyState('1.0.0');
+  s.overdueDays = 5;
+  E.applyImport(s, [
+    row('B1', { '当前责任人': '张三', '停留天数': '12', '发现发布': 'V1.0', '严重程度': '严重', '标题': '甲' }),
+    row('B2', { '当前责任人': '李四', '停留天数': '1', '发现发布': 'V2.0', '严重程度': '一般', '标题': '乙' })
+  ], '2026-08-12T09:00:00');
+  const m = E.reportModel(s, new Date('2026-08-19T15:00:00'), 'week', []);
+  assert.strictEqual(m.period, 'week');
+  assert.strictEqual(m.title, 'BUG 周报');
+  assert.ok(m.rangeLabel.indexOf('天') !== -1 && m.prevLabel.indexOf('同期') !== -1);
+  assert.strictEqual(m.versionLabel, '版本范围：全部版本');
+  assert.strictEqual(m.kpi.active, 2);
+  assert.strictEqual(m.kpi.overdue, 1, '停留 12 ≥ 5');
+  assert.strictEqual(m.kpi.severe, 1, '停留 12 ≥ 2×5');
+  assert.strictEqual(m.versions.length, 2);
+  assert.ok(m.trend.length >= 30, '趋势至少 30 天');
+  assert.strictEqual(m.severity.length, 2);
+  assert.strictEqual(m.owners.length, 2);
+  assert.strictEqual(m.overdueGroups.totalCount, 1);
+  assert.strictEqual(m.overdueGroups.groups[0].owner, '张三');
+  assert.strictEqual(m.totalBugs, 2);
+  const mm = E.reportModel(s, new Date('2026-08-19T15:00:00'), 'month', ['V1.0']);
+  assert.strictEqual(mm.title, 'BUG 月报');
+  assert.strictEqual(mm.versions.length, 1);
+  assert.strictEqual(mm.kpi.active, 1, '版本过滤生效');
+  assert.strictEqual(mm.versionLabel, '版本范围：V1.0');
+});
+
+test('groupOverdue：按人数与每组条数截断（v1.50.0）', () => {
+  const s = E.emptyState('1.0.0');
+  const rows = [];
+  for (let i = 1; i <= 12; i++) rows.push(row('X' + i, { '当前责任人': '人' + (i % 3), '停留天数': String(10 + i) }));
+  E.applyImport(s, rows, '2026-08-12T09:00:00');
+  const g = E.groupOverdue(s, [], 5, 2, 3);
+  assert.strictEqual(g.groups.length, 2, '最多 2 位责任人');
+  assert.ok(g.groups.every((x) => x.rows.length <= 3), '每组最多 3 条');
+  assert.ok(g.groups.some((x) => x.truncated), '有截断标记');
+  assert.strictEqual(g.totalCount, 12);
+  assert.strictEqual(g.ownerCount, 3, '共 3 位责任人有超期');
+});
+
 console.log(`\n结果：${passed} 通过, ${failed} 失败\n`);
 process.exit(failed > 0 ? 1 : 0);

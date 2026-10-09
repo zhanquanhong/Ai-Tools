@@ -5,7 +5,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.49.0';
+  const APP_VERSION = '1.50.0';
   // 更新日志从后端 API 拉取（data/changelog.json），不再硬编码在前端
   let CHANGELOG = [];
   // 历史更新日志已迁移至 data/changelog.json（63 条，v1.0.0 ~ v1.33.1），由 /api/changelog 提供
@@ -214,6 +214,8 @@
   window.__bugtrackerShowImportResult = (result, nowIso) => renderImportResultPanel(result, nowIso || new Date().toISOString());
   // __TEST_HOOK__：冒烟测试读取当前应用状态（与界面同源，仅内存）
   window.__bugtrackerState = () => state;
+  // __TEST_HOOK__：冒烟测试生成周报/月报 HTML（不触发下载）
+  window.__bugtrackerBuildReport = (period) => buildReportHtml(period || 'week');
   // __TEST_HOOK__：冒烟测试用——以给定行数据走真实「预览 → 确认导入 → 撤销」路径（跳过文件解析，parser 有独立单测）
   window.__bugtrackerImport = (rows) => {
     const list = Array.isArray(rows) ? rows : [];
@@ -1261,6 +1263,145 @@
     pushBtn.style.display = isAdmin ? '' : 'none';
     pushBtn.disabled = rows.length === 0;
     $('#ownerModal').classList.remove('hidden');
+  }
+
+  // ---------- 周报 / 月报（v1.50.0） ----------
+  /** 生成自包含 HTML 报告（含内联图表图片）；period: 'week' | 'month' */
+  function buildReportHtml(period) {
+    const m = Engine.reportModel(state, new Date().toISOString(), period, getVerList());
+    const esc = escapeHtml;
+    // 1) 趋势图 → PNG（离屏渲染后取 dataURL；失败则降级为无图）
+    let imgHtml = '<div class="noimg">（图表生成失败，可看页面趋势图）</div>';
+    let tmpWrap = null;
+    let tmpChart = null;
+    try {
+      tmpWrap = document.createElement('div');
+      tmpWrap.style.cssText = 'position:absolute;left:-99999px;top:0;width:900px;height:300px;';
+      document.body.appendChild(tmpWrap);
+      tmpChart = echarts.init(tmpWrap);
+      tmpChart.setOption({
+        animation: false,
+        tooltip: { trigger: 'axis' },
+        legend: { data: ['新增', '解决', '净增'], top: 0, textStyle: { fontSize: 12 } },
+        grid: { left: 44, right: 20, top: 34, bottom: 28 },
+        xAxis: { type: 'category', data: m.trend.map((d) => d.label), axisLabel: { fontSize: 10 } },
+        yAxis: { type: 'value', minInterval: 1, axisLabel: { fontSize: 10 } },
+        series: [
+          { name: '新增', type: 'bar', data: m.trend.map((d) => (d.hasData ? d.imported : null)), itemStyle: { color: '#5ac2ff' }, barMaxWidth: 12 },
+          { name: '解决', type: 'bar', data: m.trend.map((d) => (d.hasData ? d.solved : null)), itemStyle: { color: '#45bf82' }, barMaxWidth: 12 },
+          { name: '净增', type: 'line', data: m.trend.map((d) => (d.hasData ? d.net : null)), symbol: 'circle', symbolSize: 5, lineStyle: { color: '#e85418', width: 2 }, itemStyle: { color: '#e85418' }, connectNulls: true }
+        ]
+      });
+      const url = tmpChart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#ffffff' });
+      if (url && url.indexOf('data:image/png') === 0) imgHtml = `<img class="chart" src="${url}" alt="趋势图">`;
+    } catch (e) {
+      imgHtml = '<div class="noimg">（图表生成失败，可看页面趋势图）</div>';
+    } finally {
+      try { if (tmpChart) tmpChart.dispose(); } catch (e2) { /* 忽略 */ }
+      if (tmpWrap && tmpWrap.parentNode) tmpWrap.parentNode.removeChild(tmpWrap);
+    }
+    // 2) 环比小标
+    const deltaTxt = (d, r, riseBad) => {
+      if (d === 0) return '<span class="flat">— 持平</span>';
+      const up = d > 0;
+      const cls = riseBad ? (up ? 'bad' : 'good') : (up ? 'good' : 'bad');
+      return `<span class="${cls}">${up ? '▲ +' : '▼ '}${d}${r == null ? '' : `（${r > 0 ? '+' : ''}${r}%）`}</span>`;
+    };
+    const kpiCard = (label, val, extra) => `<div class="kpi"><div class="kl">${label}</div><div class="kv">${val}</div><div class="ke">${extra || ''}</div></div>`;
+    const kpis = [
+      kpiCard('本期新增', m.kpi.imported, deltaTxt(m.delta.imported, m.rate.imported, true)),
+      kpiCard('本期解决', m.kpi.solved, deltaTxt(m.delta.solved, m.rate.solved, false)),
+      kpiCard('净增', `${m.kpi.net > 0 ? '+' : ''}${m.kpi.net}`, deltaTxt(m.delta.net, m.rate.net, true)),
+      kpiCard('期末未解决', m.kpi.active, `<span class="mt">累计 ${m.totalBugs} 条</span>`),
+      kpiCard(`超期(≥${m.overdueThreshold}天)`, m.kpi.overdue, '<span class="mt">按停留天数</span>'),
+      kpiCard(`严重超期(≥${m.overdueThreshold * 2}天)`, m.kpi.severe, '<span class="mt">需优先处理</span>')
+    ].join('');
+    const verRows = m.versions.length
+      ? m.versions.map((v) => `<tr><td>${esc(v.version)}</td><td>${v.total}</td><td>${v.solved}</td><td>${v.active}</td><td><b>${v.rate}%</b></td></tr>`).join('')
+      : '<tr><td colspan="5" class="empty">暂无数据</td></tr>';
+    const sevRows = m.severity.length
+      ? m.severity.map((s) => {
+        const max = Math.max(1, ...m.severity.map((x) => x.count));
+        return `<div class="srow"><span class="sname">${esc(s.name)}</span><span class="sbar"><i style="width:${Math.round(s.count / max * 100)}%"></i></span><span class="snum">${s.count}</span></div>`;
+      }).join('')
+      : '<div class="empty">暂无数据</div>';
+    const ownerRows = m.owners.length
+      ? m.owners.map((o, i) => `<tr><td>${i + 1}</td><td>${esc(o.owner)}</td><td>${o.active}</td><td class="${o.overdue ? 'warn' : ''}">${o.overdue}</td><td class="${o.severe ? 'danger' : ''}">${o.severe}</td><td>${o.avgDays}</td><td>${o.maxDays}</td></tr>`).join('')
+      : '<tr><td colspan="7" class="empty">暂无数据</td></tr>';
+    const og = m.overdueGroups;
+    const overdueHtml = og.groups.length
+      ? og.groups.map((g) => `<div class="ogroup"><div class="oghead">${esc(g.owner)}（${g.count} 条）</div>
+          <table><thead><tr><th>编号</th><th>停留</th><th>严重程度</th><th>版本</th><th>标题</th></tr></thead><tbody>
+          ${g.rows.map((r) => `<tr><td class="id">${esc(r.id)}</td><td class="${r.days >= m.overdueThreshold * 2 ? 'danger' : ''}">${r.days} 天</td><td>${esc(r.sev || '—')}</td><td>${esc(r.ver)}</td><td class="tt">${esc(r.title)}</td></tr>`).join('')}
+          </tbody></table>${g.truncated ? '<div class="more">…该责任人还有更多超期，见系统「导出超期清单」</div>' : ''}</div>`).join('')
+        + (og.ownerCount > og.groups.length ? `<div class="more">…共 ${og.ownerCount} 位责任人有超期，仅展示前 ${og.groups.length} 位</div>` : '')
+      : '<div class="empty">本期无超期 BUG 👍</div>';
+    const stamp = new Date();
+    const ts = `${stamp.getFullYear()}-${String(stamp.getMonth() + 1).padStart(2, '0')}-${String(stamp.getDate()).padStart(2, '0')} ${String(stamp.getHours()).padStart(2, '0')}:${String(stamp.getMinutes()).padStart(2, '0')}`;
+    return `<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>${esc(m.title)} ${esc(m.rangeLabel)}</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", Arial, sans-serif; margin: 0; padding: 28px 32px; color: #1f2329; background: #fff; }
+  h1 { font-size: 22px; margin: 0 0 6px; } h1 .sub { font-size: 14px; color: #787878; font-weight: 400; margin-left: 8px; }
+  h2 { font-size: 15px; margin: 22px 0 8px; border-left: 4px solid #e85418; padding-left: 8px; }
+  .meta { font-size: 12px; color: #989898; margin-bottom: 14px; }
+  .kpis { display: flex; flex-wrap: wrap; gap: 10px; }
+  .kpi { flex: 1 0 148px; border: 1px solid #eee; border-radius: 10px; padding: 10px 12px; background: #fcfcfd; }
+  .kpi .kl { font-size: 12px; color: #787878; } .kpi .kv { font-size: 24px; font-weight: 700; margin: 2px 0; }
+  .kpi .ke { font-size: 11px; color: #989898; } .kpi .ke .good { color: #2f9e63; } .kpi .ke .bad { color: #e85418; } .kpi .ke .flat, .kpi .ke .mt { color: #b0b0b0; }
+  img.chart { width: 100%; max-width: 980px; border: 1px solid #f0f0f0; border-radius: 8px; }
+  .noimg { font-size: 12px; color: #b0b0b0; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid #f0f0f0; text-align: left; }
+  th { background: #f8f0ec; color: #484848; font-weight: 600; white-space: nowrap; }
+  td.warn { color: #d99a00; } td.danger, .danger { color: #e85418; font-weight: 600; }
+  td.id { color: #b8551c; white-space: nowrap; } td.tt { max-width: 460px; }
+  .two { display: flex; gap: 18px; align-items: flex-start; } .two > section { flex: 1 1 0; min-width: 0; }
+  .srow { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 3px 0; }
+  .sname { width: 72px; color: #484848; } .sbar { flex: 1; height: 9px; background: #f0f2f5; border-radius: 5px; overflow: hidden; }
+  .sbar i { display: block; height: 100%; background: #fdbe31; } .snum { width: 36px; text-align: right; color: #787878; }
+  .ogroup { margin-bottom: 12px; } .oghead { font-size: 13px; font-weight: 600; margin: 8px 0 4px; }
+  .more, .empty { font-size: 11px; color: #989898; padding: 4px 0; }
+  footer { margin-top: 26px; font-size: 11px; color: #b0b0b0; border-top: 1px solid #f0f0f0; padding-top: 10px; }
+  @media print { body { padding: 0; } h2 { page-break-after: avoid; } .ogroup { page-break-inside: avoid; } }
+</style></head><body>
+<h1>${esc(m.title)}<span class="sub">${esc(m.rangeLabel)}</span></h1>
+<div class="meta">生成时间 ${ts} · ${esc(m.periodLabel)}口径（${esc(m.rangeLabel)}）· ${esc(m.versionLabel)} · 数据来源：BUG 处理进展跟踪系统</div>
+<div class="kpis">${kpis}</div>
+<h2>新增 / 解决 趋势（近 ${m.trendDays} 天）</h2>
+${imgHtml}
+<div class="two">
+  <section><h2>按版本解决率</h2>
+    <table><thead><tr><th>版本</th><th>总数</th><th>已修复</th><th>未解决</th><th>解决率</th></tr></thead><tbody>${verRows}</tbody></table>
+  </section>
+  <section><h2>按严重程度（未解决 ${m.kpi.active} 条）</h2>${sevRows}</section>
+</div>
+<h2>责任人 TOP（未解决 / 超期 / 严重 / 平均停留 / 最长停留）</h2>
+<table><thead><tr><th>#</th><th>责任人</th><th>未解决</th><th>超期</th><th>严重</th><th>平均(天)</th><th>最长(天)</th></tr></thead><tbody>${ownerRows}</tbody></table>
+<h2>超期清单（停留 ≥ ${m.overdueThreshold} 天，共 ${og.totalCount} 条 / ${og.ownerCount} 人）</h2>
+${overdueHtml}
+<footer>本报告由 BUG 处理进展跟踪系统自动生成 · ${esc(m.prevLabel)} 为对比基准（同期口径） · 打印本页可另存为 PDF</footer>
+</body></html>`;
+  }
+
+  /** 下载周报/月报 HTML */
+  function downloadReport(period) {
+    let html = '';
+    try {
+      html = buildReportHtml(period);
+    } catch (e) {
+      showAlert('报告生成失败：' + e.message, true);
+      return;
+    }
+    const label = period === 'month' ? 'BUG月报' : 'BUG周报';
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${label}-${todayStr()}.html`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    showAlert(`✅ 已生成 ${label}（HTML，可直接打开或打印为 PDF）`);
   }
 
   let modalOwner = null;   // 当前查看负载详情的人
@@ -2694,6 +2835,10 @@
     $('#btnStatsModal').addEventListener('click', openStatsModal);
     // v1.49.0：超期清单一键导出 + 责任人负载详情弹层
     $('#btnExportOverdue').addEventListener('click', () => exportOverdueList(''));
+    // v1.50.0：周报 / 月报一键导出
+    $('#btnReport').addEventListener('click', () => $('#reportModal').classList.remove('hidden'));
+    $('#btnReportWeek').addEventListener('click', () => { $('#reportModal').classList.add('hidden'); downloadReport('week'); });
+    $('#btnReportMonth').addEventListener('click', () => { $('#reportModal').classList.add('hidden'); downloadReport('month'); });
     $('#ownerModalExport').addEventListener('click', () => { if (modalOwner) exportOverdueList(modalOwner); });
     $('#ownerModalPush').addEventListener('click', () => { if (modalOwner) pushOwnerOverdue(modalOwner); });
     $('#ownerModalFilter').addEventListener('click', () => {

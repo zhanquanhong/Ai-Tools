@@ -301,6 +301,86 @@
     return lines.join('\n');
   }
 
+  /**
+   * 周报/月报数据模型（v1.50.0）：一次性汇总报告所需的全部数据（纯函数，便于单测）
+   * @param {string} period 'week' | 'month'
+   * @param {Array<string>} versions 版本范围（空 = 全部）
+   */
+  function reportModel(state, now, period, versions) {
+    const p = period === 'month' ? 'month' : 'week';
+    const verList = Array.isArray(versions) ? versions : (versions ? [versions] : []);
+    const cmp = periodCompare(state, now, p, verList);
+    let th = state && state.overdueDays != null ? Number(state.overdueDays) : 5;
+    if (!isFinite(th) || th <= 0) th = 5;
+    const stats = computeStats(state, th, verList);
+    const wl = ownerWorkload(state, verList, th);
+    const pad = (n) => String(n).padStart(2, '0');
+    const fmt = (dt) => `${dt.getMonth() + 1}-${pad(dt.getDate())}`;
+    const start = new Date(cmp.current.start + 'T00:00:00');
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + cmp.days - 1);
+    const prevStart = new Date(cmp.previous.start + 'T00:00:00');
+    const prevEnd = new Date(prevStart.getFullYear(), prevStart.getMonth(), prevStart.getDate() + cmp.days - 1);
+    const trendDays = Math.max(30, cmp.days);
+    return {
+      period: p,
+      title: p === 'week' ? 'BUG 周报' : 'BUG 月报',
+      periodLabel: p === 'week' ? '本周' : '本月',
+      rangeLabel: `${fmt(start)} ~ ${fmt(end)}（${cmp.days} 天）`,
+      prevLabel: `${cmp.previous.label}（${fmt(prevStart)} ~ ${fmt(prevEnd)}）`,
+      versionLabel: verList.length ? ('版本范围：' + verList.join('、')) : '版本范围：全部版本',
+      overdueThreshold: th,
+      kpi: {
+        imported: cmp.current.imported,
+        solved: cmp.current.solved,
+        net: cmp.current.net,
+        active: stats.totalActive,
+        overdue: stats.overdue,
+        severe: wl.reduce((a, x) => a + x.severe, 0)
+      },
+      prev: cmp.previous,
+      delta: cmp.delta,
+      rate: cmp.rate,
+      trendDays,
+      trend: trendSeries(state, now, trendDays, verList),
+      versions: versionResolution(state, verList).slice(0, 10),
+      severity: Object.keys(stats.bySeverity).map((k) => ({ name: k, count: stats.bySeverity[k] }))
+        .sort((a, b) => b.count - a.count),
+      owners: wl.slice(0, 10),
+      overdueGroups: groupOverdue(state, verList, th, 5, 8),
+      totalBugs: Object.keys(state.bugs || {}).length
+    };
+  }
+
+  /** 超期分组明细（v1.50.0）：供周报/月报渲染，限制人数与每组条数 */
+  function groupOverdue(state, versions, overdueDays, maxOwners, perOwner) {
+    const list = Array.isArray(versions) ? versions : (versions ? [versions] : []);
+    const inList = (v) => list.length === 0 || list.indexOf(v) !== -1;
+    const od = Math.max(1, parseInt(overdueDays, 10) || 7);
+    const groups = {};
+    Object.keys(state.bugs || {}).forEach((id) => {
+      const rec = state.bugs[id];
+      if (!isActive(rec)) return;
+      const v = (rec.fields['发现发布'] || '').trim() || '未标注';
+      if (!inList(v)) return;
+      const d = parseInt(String(rec.fields['停留天数'] == null ? '' : rec.fields['停留天数']).trim(), 10) || 0;
+      if (d < od) return;
+      const o = ownerOf(rec);
+      if (!groups[o]) groups[o] = [];
+      groups[o].push({
+        id: String(id), days: d,
+        sev: String(rec.fields['严重程度'] == null ? '' : rec.fields['严重程度']).trim(),
+        ver: v,
+        title: String(rec.fields['标题'] == null ? '' : rec.fields['标题']).trim()
+      });
+    });
+    const owners = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length);
+    const out = owners.slice(0, maxOwners).map((o) => {
+      const rows = groups[o].slice().sort((a, b) => b.days - a.days);
+      return { owner: o, count: rows.length, rows: rows.slice(0, perOwner), truncated: rows.length > perOwner };
+    });
+    return { groups: out, totalCount: owners.reduce((a, o) => a + groups[o].length, 0), ownerCount: owners.length };
+  }
+
   /** 快照摘要（含版本维度明细，用于看板按版本筛选趋势） */
   function snapshotSummary(at, imported, solved, reactivated, totalActive, byVersion, versionCounts) {
     return { at, imported, solved, reactivated, totalActive, byVersion: byVersion || {}, versionCounts: versionCounts || {} };
@@ -1322,6 +1402,8 @@
     versionResolution,
     ownerWorkload,
     buildOverdueListText,
+    reportModel,
+    groupOverdue,
     monthStats,
     findAbnormalIds,
     detectCsvEncoding,
