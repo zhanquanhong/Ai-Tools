@@ -129,24 +129,8 @@
     return { at, imported, solved, reactivated, totalActive, byVersion: byVersion || {}, versionCounts: versionCounts || {} };
   }
 
-  /**
-   * 应用一次导入（核心流程）
-   * @param {object} state 当前状态（会被修改）
-   * @param {Array<object>} rows 导入的原始行（含 编号 等字段）
-   * @param {string} nowIso 导入时间 ISO 字符串
-   * @returns {{imported:number, solved:number, reactivated:number, ownerChanges:number, warnings:string[],
-   *            importedIds:string[], reactivatedIds:string[]}}
-   */
-  function applyImport(state, rows, nowIso) {
-    if (!state.bugs) state.bugs = {};
-    if (!state.history) state.history = [];
-    if (!state.snapshots) state.snapshots = [];
-    if (!state.people) state.people = [];
-
-    const warnings = [];
-
-    // 1. 规范化 + 去重（同次导入同编号取最后一行）
-    // 同时统计：缺编号行（清洗后为空，含全角空格/隐藏字符）与编号被清洗的行
+  /** 导入规范化阶段（纯函数）：编号清洗 + 去重（同批同编号取最后一行）+ 责任人字段解析 */
+  function prepareIncoming(rows, nowIso) {
     const byId = {};
     const skippedRows = [];   // 缺编号未导入的行 { row: 文件行号, hint: 标题片段 }
     const cleanedIds = [];    // 编号含隐藏字符被清洗 { from, to }
@@ -169,179 +153,286 @@
       rec.sys.originalOwner = parsed.originalOwner;
       byId[rec.id] = rec;   // 同编号取最后一行（真正去重）
     });
-    const incoming = Object.keys(byId).map((id) => byId[id]);
-    const rawCount = rows.length;   // 原始行数（含同批重复）
+    return {
+      incoming: Object.keys(byId).map((id) => byId[id]),
+      rawCount: rows.length,
+      skippedRows,
+      cleanedIds
+    };
+  }
 
-    // 2. 对比上次快照：识别消失（解决）与新增
-    // 范围推断（版本匹配）：仅「版本 ∈ 本次导入版本集合」的活跃 BUG 参与消失判定，
-    // 本次未出现才判定为已解决 —— 按版本/全量导入精确；范围外版本（如存量导入未覆盖的版本）一律不动
+  /**
+   * 计算一次导入的差异（纯函数，绝不修改 state）
+   * —— 导入前预览与 applyImport 共用同一套判定，保证「看到的差异 = 落库的结果」
+   * @param {object} state 当前状态（只读）
+   * @param {Array<object>} rows 导入的原始行（含 编号 等字段）
+   * @param {string} nowIso 预计导入时间 ISO
+   * @returns {object} { ok, incoming, rawCount, skippedRows, cleanedIds, plan, added, existingIds,
+   *                     solved, ownerChanges, ownerSkipped, reactivated, versionChanges,
+   *                     peopleAdded, byVersion, versionCounts, warnings }
+   */
+  function diffImport(state, rows, nowIso) {
+    const bugs = state.bugs || {};
+    const prepared = prepareIncoming(rows || [], nowIso);
+    const incoming = prepared.incoming;
     const inVersions = new Set(incoming.map((r) => (r.fields['发现发布'] || '').trim() || '未标注'));
-    const prevIds = new Set(
-      Object.keys(state.bugs).filter((id) => {
-        const rec = state.bugs[id];
-        if (!isActive(rec)) return false;
-        const v = (rec.fields['发现发布'] || '').trim() || '未标注';
-        return inVersions.has(v);
-      })
-    );
     const curIds = new Set(incoming.map((r) => r.id));
 
-    let solvedCount = 0;
-    const solvedIds = [];
-    const versionChanges = [];   // 版本变更：{id, from, to}（以最新导入版本号为准）
+    // 1. 消失即解决：范围 = 版本 ∈ 本次导入版本集合 的活跃 BUG
+    const solved = [];
     const byVersion = {};   // { 版本: {imported, solved} }
     const bumpVersion = (ver, key) => {
       const v = ver || '未标注';
       if (!byVersion[v]) byVersion[v] = { imported: 0, solved: 0 };
       byVersion[v][key]++;
     };
+    const prevIds = new Set(Object.keys(bugs).filter((id) => {
+      const rec = bugs[id];
+      if (!isActive(rec)) return false;
+      const v = (rec.fields['发现发布'] || '').trim() || '未标注';
+      return inVersions.has(v);
+    }));
     prevIds.forEach((id) => {
-      if (!curIds.has(id)) {
-        const rec = state.bugs[id];
-        rec.sys.lastSolvedAt = nowIso;
-        solvedCount++;
-        solvedIds.push(id);
-        bumpVersion(rec.fields['发现发布'], 'solved');
-      }
+      if (curIds.has(id)) return;
+      const rec = bugs[id];
+      solved.push({ id, title: rec.fields['标题'] || '', version: (rec.fields['发现发布'] || '').trim() || '未标注' });
+      bumpVersion(rec.fields['发现发布'], 'solved');
     });
 
-    // 3. 漏导防护：解决数异常（> 存量 30%）告警（由调用方决定是否强制确认）
-    if (prevIds.size > 0 && solvedCount > Math.ceil(prevIds.size * 0.3)) {
-      warnings.push(`本次对比出 ${solvedCount} 个 BUG 消失（存量 ${prevIds.size}），疑似漏导或列表不完整，请确认`);
+    // 2. 漏导防护
+    const warnings = [];
+    if (prevIds.size > 0 && solved.length > Math.ceil(prevIds.size * 0.3)) {
+      warnings.push(`本次对比出 ${solved.length} 个 BUG 消失（存量 ${prevIds.size}），疑似漏导或列表不完整，请确认`);
     }
 
-    // 4. 应用/更新每条记录
-    let importedCount = 0;
-    let reactivatedCount = 0;
-    let ownerChanges = 0;
-    let ownerSkipped = 0;   // 原始负责人保护跳过的次数
-    const importedIds = [];      // v1.45.0：本次全新导入的 BUG id（供「新增」点击跳列表）
-    const reactivatedIds = [];   // v1.45.0：本次被重新激活的 BUG id（供「重新激活」点击跳列表）
+    // 3. 逐条判定（新增 / 更新 / 保护 / 重新激活 / 版本变更 / 字段明细）
+    const plan = [];
+    let ownerSkipped = 0;
+    const originalOwners = Array.isArray(state.originalOwners) ? state.originalOwners : [];
+    const inOriginalList = (name) => originalOwners.indexOf(name) !== -1;
 
     incoming.forEach((inc) => {
-      const existed = state.bugs[inc.id];
+      const existed = bugs[inc.id];
       if (!existed) {
-        // 全新 BUG
-        inc.sys.firstSeenAt = nowIso;
-        state.bugs[inc.id] = inc;
-        importedCount++;
-        importedIds.push(inc.id);
+        plan.push({ id: inc.id, isNew: true, inc });
         bumpVersion(inc.fields['发现发布'], 'imported');
-        // 人员名单自动补全
-        const o = ownerOf(inc);
-        if (o !== '未分配' && state.people.indexOf(o) === -1) {
-          state.people.push(o);
-        }
         return;
       }
-      // 已存在：更新字段
-      const rec = existed;
-      const prevOwner = ownerOf(rec);
+      const prevOwner = ownerOf(existed);
       const newOwner = ownerOf(inc);
-      const wasSolved = !isActive(rec);
-
-      // 原始负责人保护：导入责任人是白名单（无斜杠）且与系统当前责任人不同，
-      // 说明该问题已分配给其他人 → 不更新责任人，其他字段照常更新
-      // 兜底：历史字段判定（rec.sys.originalOwner 与导入原始负责人一致时同样保护）
-      const recOriginal = rec.sys.originalOwner || '';
+      const wasSolved = !isActive(existed);
+      const recOriginal = existed.sys.originalOwner || '';
       const incOriginal = inc.sys.originalOwner || '';
-      const originalOwners = Array.isArray(state.originalOwners) ? state.originalOwners : [];
-      const inOriginalList = (name) => originalOwners.indexOf(name) !== -1;
+      // 原始负责人保护：导入责任人是白名单（无斜杠）且与系统当前责任人不同 → 不更新责任人
       const isProtected = (
-        // ① 名单判定：导入=白名单人员，且与系统当前责任人不同 → 已分配出去，不覆盖
         (inOriginalList(newOwner) && prevOwner !== newOwner) ||
-        // ② 历史字段兜底
         (recOriginal && incOriginal === recOriginal && prevOwner !== recOriginal && newOwner === recOriginal)
       );
       if (isProtected) {
-        // 保留当前责任人，不覆盖（其他字段仍会更新）
-        inc.fields['当前责任人'] = prevOwner;
         ownerSkipped++;
+        inc.fields['当前责任人'] = prevOwner;   // 保留当前责任人（与落库一致）
       }
-
-      // 责任人变更（导入覆盖 + 记录上次负责人；保护跳过的不算变更）
-      // v1.24.0：与字段变更明细合并为一条记录（from/to 表达责任人，changes 表达其他字段）
-      let ownerChangeRec = null;
-      if (prevOwner !== newOwner && !isProtected) {
-        rec.sys.prevOwner = prevOwner;
-        ownerChanges++;
-        ownerChangeRec = { from: prevOwner, to: newOwner };
-      }
-      // 重新激活：曾解决（或曾消失）又出现；手动「关闭」的 BUG 不自动重新激活（保持关闭直到手动改回）
-      if (!rec.sys.manualClosedAt && (wasSolved || (rec.sys.lastSolvedAt && rec.sys.lastSolvedAt <= nowIso))) {
-        rec.sys.reactivatedAt = nowIso;
-        // 重新激活后 lastSolvedAt 保留（用于统计"曾解决"），活跃判定由 reactivatedAt 覆盖
-        reactivatedCount++;
-        reactivatedIds.push(rec.id);
-      }
-      // 版本变更检测（v1.23.0）：以最新导入版本号为准，同步更新并罗列变更编号
-      const oldVer = (rec.fields['发现发布'] || '').trim() || '未标注';
+      const ownerChange = (prevOwner !== newOwner && !isProtected) ? { from: prevOwner, to: newOwner } : null;
+      const reactivate = !existed.sys.manualClosedAt
+        && (wasSolved || (existed.sys.lastSolvedAt && existed.sys.lastSolvedAt <= nowIso));
+      const oldVer = (existed.fields['发现发布'] || '').trim() || '未标注';
       const newVer = (inc.fields['发现发布'] || '').trim() || '未标注';
-      if (newVer !== oldVer) {
-        versionChanges.push({ id: inc.id, from: oldVer, to: newVer });
-      }
-      // 导入字段变更明细（v1.24.0）：覆盖前收集——rec.fields 仍为旧值，对比出本次变化字段
+      const versionChange = newVer !== oldVer ? { from: oldVer, to: newVer } : null;
       const fieldChanges = [];
       FIELD_KEYS.forEach((k) => {
         if (k === '编号' || k === '当前责任人') return;
         if (NO_UPDATE_FIELDS.indexOf(k) !== -1) return;
-        // 手动「关闭」的 BUG：状态列不随导入覆盖（保持「关闭」直到手动改回）
-        if (k === '状态' && rec.sys.manualClosedAt) return;
-        const oldV = String(rec.fields[k] == null ? '' : rec.fields[k]);
+        if (k === '状态' && existed.sys.manualClosedAt) return;
+        const oldV = String(existed.fields[k] == null ? '' : existed.fields[k]);
         const newV = String(inc.fields[k] == null ? '' : inc.fields[k]);
         if (oldV !== newV) fieldChanges.push({ field: k, from: oldV, to: newV });
       });
-      // 覆盖字段：同编号已存在的 BUG 只更新动态字段，静态字段（描述/创建人）保留系统现有值（v1.41.0 起标题随导入更新）
-      FIELD_KEYS.forEach((k) => {
-        if (k === '编号' || k === '当前责任人') return;
-        if (NO_UPDATE_FIELDS.indexOf(k) !== -1) return;
-        if (k === '状态' && rec.sys.manualClosedAt) return;
-        rec.fields[k] = inc.fields[k];
-      });
-      // 责任人显式赋值（incoming 已处理：斜杠解析 / 保护跳过保留 prevOwner）
-      rec.fields['当前责任人'] = inc.fields['当前责任人'];
-      if (incOriginal) rec.sys.originalOwner = incOriginal;
-      rec.sys.lastImportedAt = nowIso;
-      // 导入变更历史（v1.24.0）：责任人变更（from/to）+ 字段明细（changes）合并为一条记录
-      if (ownerChangeRec || fieldChanges.length) {
-        const rec_hist = { id: inc.id, from: '', to: '', at: nowIso, source: 'import' };
-        if (ownerChangeRec) { rec_hist.from = ownerChangeRec.from; rec_hist.to = ownerChangeRec.to; }
-        if (fieldChanges.length) rec_hist.changes = fieldChanges;
-        state.history.push(rec_hist);
-      }
-      // 人员名单自动补全
-      if (newOwner !== '未分配' && state.people.indexOf(newOwner) === -1) {
-        state.people.push(newOwner);
+      plan.push({ id: inc.id, isNew: false, inc, prevOwner, newOwner, wasSolved, isProtected, ownerChange, reactivate, versionChange, fieldChanges });
+    });
+
+    // 4. 人员名单补齐（顺序与落库一致）
+    const working = (state.people || []).slice();
+    const peopleAdded = [];
+    plan.forEach((p) => {
+      const o = ownerOf(p.inc);
+      if (o !== '未分配' && working.indexOf(o) === -1) {
+        working.push(o);
+        peopleAdded.push(o);
       }
     });
 
-    // 5. 快照记录
-    const totalActive = Object.keys(state.bugs).filter((id) => isActive(state.bugs[id])).length;
-    // 本次导入的版本分布（去重后所有行，含已存在/已解决状态行）——「按发现发布统计」数据源
+    // 5. 本次导入的版本分布（所有行，含已存在/已解决状态行）——「按发现发布统计」数据源
     const versionCounts = {};
     incoming.forEach((inc) => {
       const v = (inc.fields['发现发布'] || '').trim() || '未标注';
       versionCounts[v] = (versionCounts[v] || 0) + 1;
     });
-    state.snapshots.push(snapshotSummary(nowIso, importedCount, solvedCount, reactivatedCount, totalActive, byVersion, versionCounts));
 
     return {
-      totalCount: incoming.length,          // 本次导入去重后总条数
-      rawCount,                             // 原始行数（含同批重复编号）
-      existingCount: incoming.length - importedCount,  // 已存在（编号重复）条数
+      ok: true,
+      incoming,
+      rawCount: prepared.rawCount,
+      skippedRows: prepared.skippedRows,
+      cleanedIds: prepared.cleanedIds,
+      plan,
+      added: plan.filter((p) => p.isNew).map((p) => p.id),
+      existingIds: plan.filter((p) => !p.isNew).map((p) => p.id),
+      solved,
+      ownerChanges: plan.filter((p) => p.ownerChange).map((p) => ({ id: p.id, from: p.ownerChange.from, to: p.ownerChange.to })),
+      ownerSkipped,
+      reactivated: plan.filter((p) => p.reactivate).map((p) => p.id),
+      versionChanges: plan.filter((p) => p.versionChange).map((p) => ({ id: p.id, from: p.versionChange.from, to: p.versionChange.to })),
+      peopleAdded,
+      byVersion,
+      versionCounts,
+      warnings
+    };
+  }
+
+  /**
+   * 应用一次导入（核心流程）
+   * 判定逻辑全部来自 diffImport（预览与落库同源）；本函数只负责「落库」与记录撤销快照
+   * @param {object} state 当前状态（会被修改）
+   * @param {Array<object>} rows 导入的原始行（含 编号 等字段）
+   * @param {string} nowIso 导入时间 ISO 字符串
+   * @returns {object} 计数与清单；另含 undo（整批撤销快照，仅内存，不可写入 state/持久化）
+   */
+  function applyImport(state, rows, nowIso) {
+    if (!state.bugs) state.bugs = {};
+    if (!state.history) state.history = [];
+    if (!state.snapshots) state.snapshots = [];
+    if (!state.people) state.people = [];
+
+    const d = diffImport(state, rows, nowIso);
+    const undo = {
+      at: nowIso,
+      addedIds: [],
+      changed: [],          // 导入前的完整记录副本（fields + sys），用于精确还原
+      peopleAdded: [],
+      historyLen: state.history.length,
+      snapshotsLen: state.snapshots.length
+    };
+    const snap = (rec) => ({ id: rec.id, fields: Object.assign({}, rec.fields), sys: Object.assign({}, rec.sys) });
+
+    let importedCount = 0;
+    let solvedCount = 0;
+    let reactivatedCount = 0;
+    let ownerChanges = 0;
+    const solvedIds = [];
+    const importedIds = [];
+    const reactivatedIds = [];
+
+    // 1. 消失即解决
+    d.solved.forEach((item) => {
+      const rec = state.bugs[item.id];
+      if (!rec) return;
+      undo.changed.push(snap(rec));
+      rec.sys.lastSolvedAt = nowIso;
+      solvedCount++;
+      solvedIds.push(item.id);
+    });
+
+    // 2. 逐条应用
+    d.plan.forEach((p) => {
+      if (p.isNew) {
+        p.inc.sys.firstSeenAt = nowIso;
+        state.bugs[p.id] = p.inc;
+        importedCount++;
+        importedIds.push(p.id);
+        undo.addedIds.push(p.id);
+        const o = ownerOf(p.inc);
+        if (o !== '未分配' && state.people.indexOf(o) === -1) {
+          state.people.push(o);
+          undo.peopleAdded.push(o);
+        }
+        return;
+      }
+      const rec = state.bugs[p.id];
+      undo.changed.push(snap(rec));
+      // 责任人变更（保护跳过的已在 diff 阶段保留 prevOwner，不算变更）
+      let ownerChangeRec = null;
+      if (p.ownerChange) {
+        rec.sys.prevOwner = p.ownerChange.from;
+        ownerChanges++;
+        ownerChangeRec = p.ownerChange;
+      }
+      // 重新激活：曾解决（或曾消失）又出现；手动「关闭」的 BUG 不自动重新激活
+      if (p.reactivate) {
+        rec.sys.reactivatedAt = nowIso;
+        reactivatedCount++;
+        reactivatedIds.push(rec.id);
+      }
+      // 覆盖动态字段（静态字段 描述/创建人 保留；手动关闭的 状态 不覆盖）
+      FIELD_KEYS.forEach((k) => {
+        if (k === '编号' || k === '当前责任人') return;
+        if (NO_UPDATE_FIELDS.indexOf(k) !== -1) return;
+        if (k === '状态' && rec.sys.manualClosedAt) return;
+        rec.fields[k] = p.inc.fields[k];
+      });
+      rec.fields['当前责任人'] = p.inc.fields['当前责任人'];
+      const incOriginal = p.inc.sys.originalOwner || '';
+      if (incOriginal) rec.sys.originalOwner = incOriginal;
+      rec.sys.lastImportedAt = nowIso;
+      // 变更历史：责任人变更（from/to）+ 字段明细（changes）合并为一条
+      if (ownerChangeRec || (p.fieldChanges && p.fieldChanges.length)) {
+        const h = { id: p.id, from: '', to: '', at: nowIso, source: 'import' };
+        if (ownerChangeRec) { h.from = ownerChangeRec.from; h.to = ownerChangeRec.to; }
+        if (p.fieldChanges && p.fieldChanges.length) h.changes = p.fieldChanges;
+        state.history.push(h);
+      }
+      const newOwner = ownerOf(rec);
+      if (newOwner !== '未分配' && state.people.indexOf(newOwner) === -1) {
+        state.people.push(newOwner);
+        undo.peopleAdded.push(newOwner);
+      }
+    });
+
+    // 3. 快照记录
+    const totalActive = Object.keys(state.bugs).filter((id) => isActive(state.bugs[id])).length;
+    state.snapshots.push(snapshotSummary(nowIso, importedCount, solvedCount, reactivatedCount, totalActive, d.byVersion, d.versionCounts));
+
+    return {
+      totalCount: d.incoming.length,        // 本次导入去重后总条数
+      rawCount: d.rawCount,                 // 原始行数（含同批重复编号）
+      existingCount: d.incoming.length - importedCount,  // 已存在（编号重复）条数
       imported: importedCount,
       solved: solvedCount,
       reactivated: reactivatedCount,
       ownerChanges,
-      ownerSkipped,
-      versionChanges,                       // 版本变更清单 [{id, from, to}]
+      ownerSkipped: d.ownerSkipped,
+      versionChanges: d.versionChanges,     // 版本变更清单 [{id, from, to}]
       solvedIds,
       importedIds,                          // v1.45.0：本次新增 BUG id 列表
       reactivatedIds,                       // v1.45.0：本次重新激活 BUG id 列表
-      skippedRows,                          // 缺编号未导入的行 [{row, hint}]
-      cleanedIds,                           // 编号含隐藏字符被清洗 [{from, to}]
-      warnings
+      skippedRows: d.skippedRows,           // 缺编号未导入的行 [{row, hint}]
+      cleanedIds: d.cleanedIds,             // 编号含隐藏字符被清洗 [{from, to}]
+      warnings: d.warnings,
+      undo                                  // v1.47.0：整批撤销快照（仅内存）
     };
+  }
+
+  /**
+   * 撤销一次导入（整批回滚到导入前）—— 依据 applyImport 返回的 undo 快照精确还原
+   * @param {object} state 当前状态（会被修改）
+   * @param {object} undo applyImport 返回的 undo
+   * @returns {{ok:boolean, error?:string, removed?:number, restored?:number}}
+   */
+  function undoImport(state, undo) {
+    if (!undo || typeof undo !== 'object') return { ok: false, error: '无可撤销的导入记录（仅支持撤销最近一次导入，刷新后失效）' };
+    (undo.addedIds || []).forEach((id) => { delete state.bugs[id]; });
+    (undo.changed || []).forEach((s) => {
+      const rec = state.bugs[s.id];
+      if (!rec) return;
+      rec.fields = Object.assign({}, s.fields);
+      rec.sys = Object.assign({}, s.sys);
+    });
+    (undo.peopleAdded || []).forEach((n) => {
+      const k = state.people.indexOf(n);
+      if (k !== -1) state.people.splice(k, 1);
+    });
+    if (typeof undo.historyLen === 'number') state.history.length = Math.min(state.history.length, undo.historyLen);
+    if (typeof undo.snapshotsLen === 'number') state.snapshots.length = Math.min(state.snapshots.length, undo.snapshotsLen);
+    return { ok: true, removed: (undo.addedIds || []).length, restored: (undo.changed || []).length };
   }
 
   /** 手动修改 BUG 的「发现发布」版本（v1.23.0）：写入变更历史（source='verchange'） */
@@ -1028,6 +1119,9 @@
     normalizeRow,
     cleanId,
     applyImport,
+    diffImport,
+    undoImport,
+    prepareIncoming,
     reassign,
     updateVersion,
     updateStatus,

@@ -5,7 +5,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.46.0';
+  const APP_VERSION = '1.47.0';
   // 更新日志从后端 API 拉取（data/changelog.json），不再硬编码在前端
   let CHANGELOG = [];
   // 历史更新日志已迁移至 data/changelog.json（63 条，v1.0.0 ~ v1.33.1），由 /api/changelog 提供
@@ -34,6 +34,7 @@
   let listSort = { col: '', dir: 0 };  // BUG 列表列排序：col=排序列（当前责任人/最近修改时间），dir=1升序 -1降序 0默认
   let selectedBugId = null;       // BUG 列表当前选中行（点击持久高亮，点其他行切换，再点同行取消）
   let lastBatchMeta = null;       // v1.45.0：导入结果「新增/重新激活」跳转的来源标记 { kind:'add'|'react', count }
+  let lastImportUndo = null;      // v1.47.0：最近一次导入的撤销快照（仅内存，刷新后失效）
   let trendChart = null;
   let monthChart = null;
   let syncMode = 'local';         // 'local' 离线 / 'shared' 共享
@@ -211,6 +212,19 @@
   };
   // __TEST_HOOK__：冒烟测试直接渲染导入结果面板（验证「新增/重新激活」可点跳转）
   window.__bugtrackerShowImportResult = (result, nowIso) => renderImportResultPanel(result, nowIso || new Date().toISOString());
+  // __TEST_HOOK__：冒烟测试读取当前应用状态（与界面同源，仅内存）
+  window.__bugtrackerState = () => state;
+  // __TEST_HOOK__：冒烟测试用——以给定行数据走真实「预览 → 确认导入 → 撤销」路径（跳过文件解析，parser 有独立单测）
+  window.__bugtrackerImport = (rows) => {
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) return false;
+    pendingImport = { rows: list, columns: Object.keys(list[0]), rowCount: list.length };
+    renderMapTable(pendingImport);
+    renderImportDiff();
+    $('#importPreview').classList.remove('hidden');
+    $('#importResult').classList.add('hidden');
+    return true;
+  };
   function renderAll() {
     renderNavCounts();
     renderLastImport();
@@ -280,6 +294,8 @@
 
     $('#btnConfirmImport').addEventListener('click', confirmImport);
     $('#btnCancelImport').addEventListener('click', () => { pendingImport = null; $('#importPreview').classList.add('hidden'); });
+    // v1.47.0：字段映射变化 → 实时重算差异预览
+    $('#mapTable').addEventListener('change', () => renderImportDiff());
 
     $('#btnExportBackup').addEventListener('click', exportBackup);
     $('#btnImportBackup').addEventListener('click', () => $('#backupInput').click());
@@ -297,6 +313,7 @@
       if (!res.hasIdColumn) { showAlert(res.missingIdWarning, true); return; }
       pendingImport = res;
       renderMapTable(res);
+      renderImportDiff();   // v1.47.0：导入前差异预览
       $('#fileMeta').textContent = `文件：${file.name} · ${res.rowCount} 行 · ${res.columns.length} 列`;
       $('#importPreview').classList.remove('hidden');
       $('#importResult').classList.add('hidden');
@@ -337,22 +354,79 @@
     return map;
   }
 
-  function confirmImport() {
-    if (!pendingImport) return;
+  /** 按当前字段映射重建导入行；未映射「编号」返回 null（v1.47.0 抽出，供差异预览与确认导入共用） */
+  function buildRowsFromMapping() {
+    if (!pendingImport) return null;
     const map = getMapping();
-    if (!map['编号']) { showAlert('必须映射「编号」列（主键）', true); return; }
-
-    // 按映射重建行
-    const rows = pendingImport.rows.map((r) => {
+    if (!map['编号']) return null;
+    return pendingImport.rows.map((r) => {
       const obj = {};
       Object.keys(map).forEach((field) => {
         obj[field] = r[map[field]] == null ? '' : r[map[field]];
       });
       return obj;
     });
+  }
+
+  /** 导入前差异预览（v1.47.0）：与落库共用 Engine.diffImport，保证「预览 = 结果」 */
+  function renderImportDiff() {
+    const box = $('#importDiff');
+    if (!box || !pendingImport) return;
+    const rows = buildRowsFromMapping();
+    if (!rows) {
+      box.innerHTML = '<div class="diff-warn">⚠️ 请先映射「编号」列（主键），否则无法预览差异</div>';
+      return;
+    }
+    const d = Engine.diffImport(state, rows, new Date().toISOString());
+    const esc = escapeHtml;
+    const stat = (n, label, cls) => `<div class="diff-stat ${cls || ''}"><b>${n}</b>${label}</div>`;
+    const titleOf = (id) => {
+      const p = d.plan.find((x) => x.id === id);
+      return p ? String(p.inc.fields['标题'] || '').slice(0, 40) : '';
+    };
+    let html = '<div class="diff-title">📋 导入差异预览 <span class="diff-hint">确认无误后点「确认导入」才会落库</span></div>';
+    html += '<div class="diff-stats">'
+      + stat(d.incoming.length, '总条数') + stat(d.added.length, '新增', 'd-add')
+      + stat(d.existingIds.length, '已存在') + stat(d.solved.length, '判定解决', 'd-fix')
+      + stat(d.reactivated.length, '重新激活', 'd-re') + stat(d.ownerChanges.length, '更新责任人', 'd-own')
+      + stat(d.versionChanges.length, '版本变更', 'd-ver') + stat(d.ownerSkipped, '跳过白名单', 'd-skip')
+      + '</div>';
+    if (d.rawCount !== d.incoming.length) html += `<div class="diff-note">原始 ${d.rawCount} 行 → 去重后 ${d.incoming.length} 条</div>`;
+    const block = (title, items, fmt, cls) => {
+      if (!items.length) return '';
+      const shown = items.slice(0, 20);
+      return `<div class="diff-block ${cls || ''}"><div class="diff-block-t">${title}（${items.length}）</div><ul>`
+        + shown.map(fmt).join('') + '</ul>'
+        + (items.length > shown.length ? `<div class="diff-more">…仅展示前 ${shown.length} 条，完整结果以落库后列表为准</div>` : '')
+        + '</div>';
+    };
+    html += block('新增', d.added.map((id) => ({ id, t: titleOf(id) })),
+      (x) => `<li><code>${esc(x.id)}</code> ${esc(x.t)}</li>`, 'b-add');
+    html += block('判定解决（本次列表未出现）', d.solved,
+      (x) => `<li><code>${esc(x.id)}</code> ${esc(String(x.title || '').slice(0, 40))}</li>`, 'b-fix');
+    html += block('重新激活', d.reactivated.map((id) => ({ id, t: titleOf(id) })),
+      (x) => `<li><code>${esc(x.id)}</code> ${esc(x.t)}</li>`, 'b-re');
+    html += block('责任人变更', d.ownerChanges,
+      (x) => `<li><code>${esc(x.id)}</code> ${esc(String(x.from))} → <b>${esc(String(x.to))}</b></li>`, 'b-own');
+    html += block('版本变更', d.versionChanges,
+      (x) => `<li><code>${esc(x.id)}</code> ${esc(String(x.from))} → <b>${esc(String(x.to))}</b></li>`, 'b-ver');
+    if (d.warnings.length) html += `<div class="diff-warn">⚠️ ${esc(d.warnings.join('；'))}</div>`;
+    if (d.skippedRows.length) html += `<div class="diff-warn">⚠️ ${d.skippedRows.length} 行缺编号，未导入（如第 ${d.skippedRows.slice(0, 5).map((s) => s.row).join('、')} 行）</div>`;
+    if (d.cleanedIds.length) html += `<div class="diff-note">ℹ️ ${d.cleanedIds.length} 个编号含隐藏字符（全角空格/换行等），将自动清洗后导入</div>`;
+    if (!d.added.length && !d.solved.length && !d.reactivated.length && !d.ownerChanges.length && !d.versionChanges.length && !d.plan.some((p) => p.fieldChanges && p.fieldChanges.length)) {
+      html += '<div class="diff-note">本次无数据变化（全部为已存在且内容一致）</div>';
+    }
+    box.innerHTML = html;
+  }
+
+  function confirmImport() {
+    if (!pendingImport) return;
+    const rows = buildRowsFromMapping();
+    if (!rows) { showAlert('必须映射「编号」列（主键）', true); return; }
 
     const nowIso = new Date().toISOString();
     const result = Engine.applyImport(state, rows, nowIso);
+    lastImportUndo = result.undo || null;
     const saved = save();
 
     pendingImport = null;
@@ -431,6 +505,7 @@
       ${cleanHtml}
       ${verChangeHtml}
       ${result.solved ? `<div class="undo-row"><button class="btn btn-plain btn-sm" id="btnUndoSolved">↩ 撤销判定解决（${result.solved} 个）</button><span style="font-size:11px;color:#989898">误判时点击，恢复为未解决</span></div>` : ''}
+      ${result.undo ? `<div class="undo-row"><button class="btn btn-plain btn-sm" id="btnUndoImport">↩ 撤销本次导入</button><span style="font-size:11px;color:#989898">整批回滚到导入前（仅本次会话有效，刷新后失效）</span></div>` : ''}
       ${warnHtml}`;
     el.classList.remove('hidden');
     // v1.45.0：「新增 / 重新激活」数字点击 → 跳转 BUG 列表并只显示这批 BUG
@@ -449,6 +524,23 @@
         renderAll();
         el.innerHTML = `<b>↩ 已撤销 ${n} 个 BUG 的解决判定，恢复为未解决</b>`;
         el.className = 'import-result ok';
+      };
+    }
+    // v1.47.0：整批撤销本次导入（回滚到导入前）
+    const undoImpBtn = $('#btnUndoImport');
+    if (undoImpBtn) {
+      undoImpBtn.onclick = () => {
+        if (!lastImportUndo) { showAlert('撤销记录已失效（刷新页面后不可撤销）', true); return; }
+        if (!confirm('确定撤销本次导入？将整批回滚到导入前的数据状态。')) return;
+        const u = Engine.undoImport(state, lastImportUndo);
+        if (!u.ok) { showAlert(u.error, true); return; }
+        lastImportUndo = null;
+        if (activeFilters.__importBatch) delete activeFilters.__importBatch;
+        lastBatchMeta = null;
+        save();
+        renderAll();
+        el.className = 'import-result ok';
+        el.innerHTML = `<b>↩ 已撤销本次导入：移除新增 ${u.removed} 条，还原 ${u.restored} 条记录</b>`;
       };
     }
 

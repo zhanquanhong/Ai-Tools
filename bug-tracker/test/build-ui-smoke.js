@@ -734,6 +734,71 @@ setTimeout(() => {
   document.body.insertAdjacentHTML('beforeend', '<div id="smokeResults" style="position:fixed;bottom:0;left:0;background:#111;color:#0f0;padding:10px;font:12px monospace;z-index:9999;white-space:pre">' + results.join('\\n') + '</div>');
 }, 800);
 
+// ===== v1.47.0：导入「差异预览 + 整批撤销」（走真实 预览→确认→落库→撤销 路径）=====
+setTimeout(async () => {
+  const dataRows = () => Array.from(document.querySelectorAll('#bugTbody tr')).filter((tr) => !tr.classList.contains('empty-row'));
+  const activeIds = (st) => Object.keys(st.bugs).filter((id) => window.BugEngine.isActive(st.bugs[id]));
+  try {
+    const mkRow = (o) => Object.assign({
+      '编号': '', '标题': 't', '描述': '', '状态': '新建', '发现发布': 'V1.0', '分析原因': '',
+      '停留天数': '0', '严重程度': '一般', '当前责任人': '张伟', '最近修改时间': '', '创建人': '',
+      '退回原因': '', '激活原因': '', '最近更新人': ''
+    }, o);
+    const st0 = window.__bugtrackerState();
+    const idsBefore = Object.keys(st0.bugs);
+    const firstId = idsBefore[0];
+    const beforeCnt = activeIds(st0).length;
+    document.querySelector('.nav-item[data-view="import"]').click();
+    window.__bugtrackerImport([
+      mkRow({ '编号': firstId, '标题': '冒烟改名', '状态': '处理中', '发现发布': 'V1.0', '严重程度': '严重', '停留天数': '9', '当前责任人': '张伟' }),
+      mkRow({ '编号': 'B9001', '标题': '冒烟新增单', '状态': '新建', '发现发布': 'V2.0', '严重程度': '一般', '停留天数': '0', '当前责任人': '张伟' })
+    ]);
+    const diffBox = document.querySelector('#importDiff');
+    const diffNums = {};
+    if (diffBox) {
+      Array.from(diffBox.querySelectorAll('.diff-stat')).forEach((d) => {
+        diffNums[d.textContent.replace(/[0-9]+/g, '').trim()] = parseInt(d.querySelector('b').textContent, 10) || 0;
+      });
+    }
+    check('v1.47.0：出现「导入差异预览」面板', !!diffBox && !!diffBox.querySelector('.diff-stats'));
+    check('v1.47.0：预览含 5 类统计（新增/已存在/判定解决/重新激活/更新责任人）',
+      ['新增', '已存在', '判定解决', '重新激活', '更新责任人'].every((k) => k in diffNums));
+    check('v1.47.0：预览识别出新增 B9001', !!diffBox && diffBox.textContent.indexOf('B9001') !== -1 && diffNums['新增'] >= 1);
+    check('v1.47.0：预览未落库（状态里还没有 B9001）', Object.keys(window.__bugtrackerState().bugs).indexOf('B9001') === -1);
+    document.querySelector('.nav-item[data-view="list"]').click();
+    document.querySelector('#quickSearch').value = 'B9001';
+    document.querySelector('#quickSearch').dispatchEvent(new Event('input'));
+    check('v1.47.0：确认前列表搜不到 B9001', dataRows().length === 0);
+    document.querySelector('#btnClearFilters').click();
+    document.querySelector('.nav-item[data-view="import"]').click();
+    document.querySelector('#btnConfirmImport').click();
+    await new Promise((r) => setTimeout(r, 150));
+    const stA = window.__bugtrackerState();
+    check('v1.47.0：确认后落库（结果面板出现）', document.querySelector('#importResult').textContent.indexOf('导入完成') !== -1);
+    check('v1.47.0：结果面板出现「撤销本次导入」按钮', !!document.querySelector('#btnUndoImport'));
+    const afterCnt = activeIds(stA).length;
+    const expectDelta = (diffNums['新增'] || 0) + (diffNums['重新激活'] || 0) - (diffNums['判定解决'] || 0);
+    check('v1.47.0：落库结果与预览一致（活跃 ' + beforeCnt + '→' + afterCnt + '，预览预期 ' + expectDelta + '）', afterCnt === beforeCnt + expectDelta);
+    check('v1.47.0：新增 B9001 已落库', !!stA.bugs['B9001']);
+    await new Promise((r) => setTimeout(r, 250));   // 等 renderImportResultPanel 内的首屏渲染
+    const stA2 = window.__bugtrackerState();
+    check('v1.47.0：字段已更新（首条标题=冒烟改名）', !!(stA2.bugs[firstId] && stA2.bugs[firstId].fields['标题'] === '冒烟改名'));
+    document.querySelector('#btnUndoImport').click();
+    await new Promise((r) => setTimeout(r, 150));
+    const stB = window.__bugtrackerState();
+    check('v1.47.0：撤销后提示「已撤销本次导入」', document.querySelector('#importResult').textContent.indexOf('已撤销本次导入') !== -1);
+    check('v1.47.0：撤销后新增单已移除', !stB.bugs['B9001']);
+    check('v1.47.0：撤销后字段已还原', !!(stB.bugs[firstId] && stB.bugs[firstId].fields['标题'] !== '冒烟改名'));
+    check('v1.47.0：撤销后活跃数与导入前一致（' + activeIds(stB).length + ' = ' + beforeCnt + '）', activeIds(stB).length === beforeCnt);
+    check('v1.47.0：撤销后 BUG 集合与导入前一致', Object.keys(stB.bugs).sort().join(',') === idsBefore.slice().sort().join(','));
+  } catch (e) {
+    results.push('EXCEPTION | v1.47.0 import: ' + e.message);
+  }
+  const div = document.getElementById('smokeResults');
+  if (div) div.textContent = results.join('\\n');
+  document.title = results.filter((r) => r.startsWith('FAIL') || r.startsWith('EXCEPTION')).length === 0 ? 'SMOKE-ALL-PASS' : 'SMOKE-FAIL';
+}, 850);
+
 // ===== v1.46.0：超期提醒（异步阶段：需等待 fetch mock 的 Promise 落地）=====
 setTimeout(async () => {
   const vis = (el) => !!el && el.offsetWidth > 0 && el.offsetHeight > 0 && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0;

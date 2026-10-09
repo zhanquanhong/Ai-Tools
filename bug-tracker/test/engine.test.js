@@ -1256,5 +1256,81 @@ test('filterRecords：idset 按 id 集合精确匹配（v1.45.0）', () => {
   assert.strictEqual(E.filterRecords(recs, { __importBatch: { type: 'idset', value: ['NOPE'] } }).length, 0);
 });
 
+// ---------- v1.47.0：diffImport（导入前差异预览）+ undoImport（整批撤销） ----------
+test('diffImport：纯函数不改 state，且与 applyImport 计数同源（v1.47.0）', () => {
+  const s1 = E.emptyState('1.0.0');
+  E.applyImport(s1, [row('B1', { '标题': '甲', '当前责任人': '张三' }), row('B2')], '2026-08-12T09:00:00');
+  const before = JSON.stringify(s1);
+  const rows = [row('B1', { '标题': '甲改', '当前责任人': '李四' }), row('B3', { '当前责任人': '王五' })];
+  const d = E.diffImport(s1, rows, '2026-08-13T09:00:00');
+  assert.strictEqual(JSON.stringify(s1), before, 'diffImport 绝不能修改 state');
+  assert.strictEqual(d.ok, true);
+  assert.deepStrictEqual(d.added, ['B3']);
+  assert.deepStrictEqual(d.existingIds, ['B1']);
+  assert.deepStrictEqual(d.solved.map((x) => x.id), ['B2'], '范围内消失 → 判定解决');
+  assert.deepStrictEqual(d.ownerChanges.map((x) => x.id), ['B1']);
+  assert.strictEqual(d.plan.find((p) => p.id === 'B1').fieldChanges.length, 1, '标题变更 1 项');
+  assert.deepStrictEqual(d.peopleAdded, ['李四', '王五'], '新责任人自动补入人员名单');
+  // 与真实落库结果同源
+  const s2 = E.emptyState('1.0.0');
+  E.applyImport(s2, [row('B1', { '标题': '甲', '当前责任人': '张三' }), row('B2')], '2026-08-12T09:00:00');
+  const r = E.applyImport(s2, rows, '2026-08-13T09:00:00');
+  assert.strictEqual(r.imported, d.added.length);
+  assert.strictEqual(r.existingCount, d.existingIds.length);
+  assert.strictEqual(r.solved, d.solved.length);
+  assert.strictEqual(r.reactivated, d.reactivated.length);
+  assert.strictEqual(r.ownerChanges, d.ownerChanges.length);
+  assert.strictEqual(r.ownerSkipped, d.ownerSkipped);
+  assert.deepStrictEqual(r.versionChanges, d.versionChanges);
+});
+
+test('diffImport：白名单保护 → ownerSkipped 且预览显示保留当前责任人（v1.47.0）', () => {
+  const s = E.emptyState('1.0.0');   // 默认白名单含「唐朝汉」
+  E.applyImport(s, [row('B1', { '当前责任人': '李四' })], '2026-08-12T09:00:00');
+  const d = E.diffImport(s, [row('B1', { '当前责任人': '唐朝汉' })], '2026-08-13T09:00:00');
+  assert.strictEqual(d.ownerSkipped, 1);
+  assert.deepStrictEqual(d.ownerChanges, []);
+  const p = d.plan[0];
+  assert.strictEqual(p.isProtected, true);
+  assert.strictEqual(p.inc.fields['当前责任人'], '李四', '预览即显示将被保留的责任人');
+});
+
+test('undoImport：整批撤销精确还原（新增/解决/责任人/字段/人员/历史/快照）（v1.47.0）', () => {
+  const s = E.emptyState('1.0.0');
+  E.applyImport(s, [row('B1', { '标题': '甲', '当前责任人': '张三' }), row('B2', { '标题': '乙', '当前责任人': '张三' })], '2026-08-12T09:00:00');
+  const before = JSON.stringify(s);
+  const r = E.applyImport(s, [row('B1', { '标题': '甲改', '当前责任人': '李四' }), row('B3', { '标题': '丙', '当前责任人': '王五' })], '2026-08-13T09:00:00');
+  assert.strictEqual(r.imported, 1);
+  assert.strictEqual(r.solved, 1);
+  assert.strictEqual(r.ownerChanges, 1);
+  assert.notStrictEqual(JSON.stringify(s), before, '导入后状态应已改变');
+  assert.ok(s.history.length > 0 && s.snapshots.length === 2);
+  const u = E.undoImport(s, r.undo);
+  assert.strictEqual(u.ok, true);
+  assert.strictEqual(u.removed, 1, '删除 1 个新增 BUG');
+  assert.ok(u.restored >= 2, '还原被解决 + 被更新的记录');
+  assert.strictEqual(JSON.stringify(s), before, '撤销后必须与导入前逐字节一致');
+});
+
+test('undoImport：撤销「重新激活」恢复为已解决（v1.47.0）', () => {
+  const s = E.emptyState('1.0.0');
+  E.applyImport(s, [row('B1')], '2026-08-12T09:00:00');
+  E.applyImport(s, [row('B99')], '2026-08-13T09:00:00');   // B1 消失 → 解决（B99 保持 V1.0 在范围内）
+  assert.strictEqual(E.isActive(s.bugs['B1']), false);
+  const before = JSON.stringify(s);
+  const r = E.applyImport(s, [row('B1')], '2026-08-14T09:00:00');
+  assert.strictEqual(r.reactivated, 1);
+  assert.strictEqual(E.isActive(s.bugs['B1']), true);
+  E.undoImport(s, r.undo);
+  assert.strictEqual(JSON.stringify(s), before);
+  assert.strictEqual(E.isActive(s.bugs['B1']), false, '撤销后恢复为已解决');
+});
+
+test('undoImport：无记录时返回错误（v1.47.0）', () => {
+  const s = E.emptyState('1.0.0');
+  assert.strictEqual(E.undoImport(s, null).ok, false);
+  assert.strictEqual(E.undoImport(s, undefined).ok, false);
+});
+
 console.log(`\n结果：${passed} 通过, ${failed} 失败\n`);
 process.exit(failed > 0 ? 1 : 0);
