@@ -151,15 +151,27 @@ def load_state(path: str = STATE_FILE) -> dict:
         return {}
 
 
-def collect_overdue(state: dict, overdue_days: int, severe_days: int) -> dict:
-    """汇总超期/停滞清单。返回 {rows, stats}（rows 已按停留天数降序）。"""
+def collect_overdue(state: dict, overdue_days: int, severe_days: int,
+                    owner: str = '', versions=None) -> dict:
+    """汇总超期/停滞清单。返回 {rows, stats}（rows 已按停留天数降序）。
+
+    owner：仅统计该责任人；versions：仅统计这些版本（空/None = 全部）。
+    """
     bugs = state.get('bugs') or {}
+    ver_list = list(versions) if isinstance(versions, (list, tuple)) else []
     rows = []
     active = 0
     for bid, rec in bugs.items():
         if not isinstance(rec, dict):
             continue
         if not is_active(rec.get('sys') or {}):
+            continue
+        f = rec.get('fields') or {}
+        if ver_list:
+            v = str(f.get('发现发布') or '').strip() or '未标注'
+            if v not in ver_list:
+                continue
+        if owner and _owner(rec) != owner:
             continue
         active += 1
         days = _stay_days(rec)
@@ -180,6 +192,8 @@ def collect_overdue(state: dict, overdue_days: int, severe_days: int) -> dict:
         last_snap = snaps[-1]
     stats = {
         'active': active,
+        'owner': owner or '',
+        'versions': ver_list,
         'overdue': len(rows),
         'severe': sum(1 for r in rows if r['severe']),
         'unassigned': sum(1 for r in rows if r['owner'] == '未分配'),
@@ -203,21 +217,30 @@ def _fmt_time(iso: str) -> str:
         return str(iso)[:16]
 
 
-def build_digest(state: dict, cfg: dict, now: float | None = None, url: str = '') -> dict:
-    """构建提醒内容（不发送）。返回 {title, markdown, text, stats, rows}。"""
+def build_digest(state: dict, cfg: dict, now: float | None = None, url: str = '',
+                 owner: str = '', versions=None) -> dict:
+    """构建提醒内容（不发送）。返回 {title, markdown, text, stats, rows}。
+
+    owner / versions 非空时构建「该责任人 / 该版本范围」的超期提醒。
+    """
     now = now if now is not None else time.time()
     od = max(1, int(cfg.get('overdue_days') or 7))
     sv = max(od, int(cfg.get('severe_days') or 14))
     top_n = max(1, int(cfg.get('top_n') or 5))
     max_groups = max(1, int(cfg.get('max_groups') or 8))
 
-    data = collect_overdue(state, od, sv)
+    data = collect_overdue(state, od, sv, owner=owner, versions=versions)
     rows, stats = data['rows'], data['stats']
 
     date_str = time.strftime('%Y-%m-%d', time.localtime(now))
-    title = '%s · %s' % (str(cfg.get('title') or DEFAULTS['title']), date_str)
+    if owner:
+        title = '%s · %s · %s' % (str(cfg.get('title') or DEFAULTS['title']), owner, date_str)
+    else:
+        title = '%s · %s' % (str(cfg.get('title') or DEFAULTS['title']), date_str)
 
     lines = []
+    if owner:
+        lines.append('**责任人：%s**（当前活跃 %d 条）' % (owner, stats['active']))
     if not rows:
         lines.append('**当前无超期 BUG**（活跃 %d 条，均未超过 %d 天）👍' % (stats['active'], od))
     else:
@@ -357,17 +380,19 @@ def last_result() -> dict:
 
 
 # ---------------------------------------------------------------- 发送编排
-def send_now(cfg: dict | None = None, state: dict | None = None, url: str | None = None, reason: str = 'manual') -> dict:
+def send_now(cfg: dict | None = None, state: dict | None = None, url: str | None = None,
+             reason: str = 'manual', owner: str = '', versions=None) -> dict:
     """构建并发送一次；写日志。返回 {ok, err, stats, title}。"""
     cfg = cfg or load_config()
     state = state if state is not None else load_state()
     if url is None:
         url = str(cfg.get('url') or '')
-    digest = build_digest(state, cfg, url=url)
+    digest = build_digest(state, cfg, url=url, owner=owner, versions=versions)
     ok, err = send_feishu(cfg, digest['title'], digest['markdown'])
     append_log({
         'time': time.strftime('%Y-%m-%d %H:%M:%S'),
         'reason': reason,
+        'owner': owner or '',
         'ok': bool(ok),
         'err': '' if ok else str(err),
         'active': digest['stats'].get('active'),

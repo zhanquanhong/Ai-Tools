@@ -94,6 +94,45 @@ setTimeout(() => {
     check('v1.48.0：版本解决率按版本列出行（V1.0 / V2.0）', vrateRows.length === 2 && vis(vrateRows[0]));
     check('v1.48.0：版本解决率含百分比与已修复/总数',
       /%/.test(document.querySelector('#verRateRows').textContent) && document.querySelector('#verRateRows').textContent.indexOf('已修复') !== -1);
+    // ===== v1.49.0：责任人负载下钻 + 超期清单一键导出/推送 =====
+    const ownerRows49 = Array.from(document.querySelectorAll('#ownerStats .person-row'));
+    check('v1.49.0：责任人行含「负载」详情入口', ownerRows49.length > 0 && document.querySelectorAll('#ownerStats .owner-detail').length === ownerRows49.length);
+    check('v1.49.0：责任人行显示 未解决/超期/平均/最长',
+      ['未解决', '超期', '平均', '最长'].every((k) => ownerRows49[0].querySelector('.nums').textContent.indexOf(k) !== -1));
+    const zhangDetail49 = ownerRows49.find((r) => r.dataset.owner === encodeURIComponent('张伟')).querySelector('.owner-detail');
+    zhangDetail49.click();
+    const om = document.querySelector('#ownerModal');
+    check('v1.49.0：负载详情弹层打开且可见', !om.classList.contains('hidden') && vis(om));
+    check('v1.49.0：弹层标题含责任人与「负载详情」',
+      document.querySelector('#ownerModalTitle').textContent.indexOf('张伟') !== -1 && document.querySelector('#ownerModalTitle').textContent.indexOf('负载详情') !== -1);
+    check('v1.49.0：弹层 6 项负载指标', document.querySelectorAll('#ownerModalStat .om-stat').length === 6);
+    const omTxt = document.querySelector('#ownerModalStat').textContent;
+    check('v1.49.0：指标含 未解决/超期/严重/平均停留/最长停留/严重程度分布',
+      ['未解决', '超期', '严重', '平均停留', '最长停留', '严重程度分布'].every((k) => omTxt.indexOf(k) !== -1));
+    const omRows = document.querySelectorAll('#ownerModalList tbody tr');
+    check('v1.49.0：弹层超期清单表（张伟 1 条超期，含 B3）', omRows.length === 1 && omRows[0].textContent.indexOf('B3') !== -1);
+    check('v1.49.0：弹层含 筛到列表/导出/推送 按钮（管理员推送可见）',
+      !!document.querySelector('#ownerModalFilter') && !!document.querySelector('#ownerModalExport') &&
+      document.querySelector('#ownerModalPush').style.display !== 'none' && vis(document.querySelector('#ownerModalPush')));
+    document.querySelector('#ownerModalFilter').click();
+    check('v1.49.0：弹层「筛到列表」→ 按该人筛选（1 行）',
+      document.querySelector('#view-list').style.display !== 'none' && document.querySelectorAll('#bugTbody tr').length === 1);
+    document.querySelector('#btnClearFilters').click();
+    document.querySelector('.nav-item[data-view="dashboard"]').click();
+    const zhangDetail49b = Array.from(document.querySelectorAll('#ownerStats .owner-detail')).find((el) => el.dataset.owner === encodeURIComponent('张伟'));
+    zhangDetail49b.click();
+    window.__bugtrackerApplyRole('user');
+    zhangDetail49b.click();
+    check('v1.49.0：普通用户隐藏「推送到飞书」', document.querySelector('#ownerModalPush').style.display === 'none');
+    window.__bugtrackerApplyRole('admin');
+    document.querySelector('#ownerModal .modal-close').click();
+    check('v1.49.0：负载弹层可关闭', document.querySelector('#ownerModal').classList.contains('hidden'));
+    // 超期清单一键导出（跟随版本筛选；先恢复全部版本）
+    const verAllLink49 = document.querySelector('#btnShowAllVers');
+    if (verAllLink49 && verAllLink49.classList.contains('active')) verAllLink49.click();
+    check('v1.49.0：看板「📤 超期清单」按钮可见', vis(document.querySelector('#btnExportOverdue')));
+    document.querySelector('#btnExportOverdue').click();
+    check('v1.49.0：导出超期清单提示（按责任人分组）', document.querySelector('#globalAlert').textContent.indexOf('已导出超期清单') !== -1);
     document.querySelector('.nav-item[data-view="list"]').click();
     check('列表显示 3 行', document.querySelectorAll('#bugTbody tr').length === 3);
     check('列表行含上次责任人(王强)', document.querySelector('#bugTbody tr').textContent.indexOf('王强') !== -1);

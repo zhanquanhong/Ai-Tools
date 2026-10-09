@@ -283,3 +283,41 @@ class TestLogAndSchedule:
         out = notifier.send_now(cfg, state_of([mk('B1', 30)]), reason='test')
         assert out['ok'] is False and out['stats']['overdue'] == 1
         assert notifier.last_result()['ok'] is False
+
+
+# ---------------------------------------------------------------- v1.49.0：责任人 / 版本范围过滤
+class TestOwnerAndVersionFilter:
+    def test_按责任人过滤_含未分配(self):
+        st = state_of([
+            mk('B1', 30, '张三'), mk('B2', 10, '张三'), mk('B3', 20, '李四'), mk('B4', 9, '')
+        ])
+        out = notifier.collect_overdue(st, 7, 14, owner='张三')
+        assert [r['id'] for r in out['rows']] == ['B1', 'B2']
+        assert out['stats']['overdue'] == 2 and out['stats']['active'] == 2 and out['stats']['owner'] == '张三'
+        un = notifier.collect_overdue(st, 7, 14, owner='未分配')
+        assert [r['id'] for r in un['rows']] == ['B4'], '空责任人按「未分配」匹配'
+
+    def test_按版本过滤(self):
+        st = state_of([
+            mk('B1', 30, '张三', ver='V1.0'), mk('B2', 30, '张三', ver='V2.0')
+        ])
+        out = notifier.collect_overdue(st, 7, 14, versions=['V2.0'])
+        assert [r['id'] for r in out['rows']] == ['B2']
+        assert notifier.collect_overdue(st, 7, 14, versions=[])['stats']['overdue'] == 2, '空列表=全部'
+
+    def test_build_digest_责任人标题与首行(self):
+        st = state_of([mk('B1', 30, '张三'), mk('B2', 9, '李四')], snaps=[{'at': '2026-10-09T09:30:00', 'imported': 1, 'solved': 0}])
+        cfg = dict(notifier.DEFAULTS, overdue_days=7, severe_days=14)
+        d = notifier.build_digest(st, cfg, now=time.time(), owner='张三')
+        assert '张三' in d['title']
+        assert '**责任人：张三**' in d['markdown']
+        assert d['stats']['overdue'] == 1
+        assert '李四' not in d['markdown'], '只含该责任人的清单'
+
+    def test_send_now_带责任人写日志(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(notifier, 'DATA_DIR', str(tmp_path))
+        monkeypatch.setattr(notifier, 'NOTIFY_LOG_FILE', str(tmp_path / 'notify-log.json'))
+        cfg = dict(notifier.DEFAULTS, webhook='')
+        out = notifier.send_now(cfg, state_of([mk('B1', 30, '张三')]), reason='owner', owner='张三')
+        assert out['ok'] is False and out['stats']['overdue'] == 1
+        assert notifier.last_result()['owner'] == '张三'

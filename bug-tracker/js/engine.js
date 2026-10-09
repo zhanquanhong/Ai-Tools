@@ -220,6 +220,87 @@
     }).sort((a, b) => b.total - a.total);
   }
 
+  /**
+   * 责任人负载（v1.49.0）：未解决 / 超期 / 严重超期(≥2×阈值) / 平均与最长停留 / 严重程度分布
+   * 只统计活跃 BUG；按 超期数 → 未解决数 → 最长停留 降序
+   */
+  function ownerWorkload(state, versions, overdueDays) {
+    const list = Array.isArray(versions) ? versions : (versions ? [versions] : []);
+    const inList = (v) => list.length === 0 || list.indexOf(v) !== -1;
+    const od = Math.max(1, parseInt(overdueDays, 10) || 7);
+    const map = {};
+    Object.keys(state.bugs || {}).forEach((id) => {
+      const rec = state.bugs[id];
+      if (!isActive(rec)) return;
+      const v = (rec.fields['发现发布'] || '').trim() || '未标注';
+      if (!inList(v)) return;
+      const o = ownerOf(rec);
+      if (!map[o]) map[o] = { owner: o, active: 0, overdue: 0, severe: 0, daysSum: 0, maxDays: 0, bySeverity: {} };
+      const r = map[o];
+      const parsed = parseInt(String(rec.fields['停留天数'] == null ? '' : rec.fields['停留天数']).trim(), 10);
+      const d = isNaN(parsed) ? 0 : parsed;
+      r.active++;
+      r.daysSum += d;
+      if (d > r.maxDays) r.maxDays = d;
+      if (d >= od) r.overdue++;
+      if (d >= od * 2) r.severe++;
+      const sev = String(rec.fields['严重程度'] == null ? '' : rec.fields['严重程度']).trim() || '未标注';
+      r.bySeverity[sev] = (r.bySeverity[sev] || 0) + 1;
+    });
+    return Object.keys(map).map((o) => {
+      const r = map[o];
+      r.avgDays = r.active ? Math.round(r.daysSum * 10 / r.active) / 10 : 0;
+      return r;
+    }).sort((a, b) => (b.overdue - a.overdue) || (b.active - a.active) || (b.maxDays - a.maxDays));
+  }
+
+  /**
+   * 超期清单文本（v1.49.0）：按责任人分组（组内停留天数降序）；ownerFilter 非空只导该责任人
+   */
+  function buildOverdueListText(state, versions, overdueDays, ownerFilter) {
+    const list = Array.isArray(versions) ? versions : (versions ? [versions] : []);
+    const inList = (v) => list.length === 0 || list.indexOf(v) !== -1;
+    const od = Math.max(1, parseInt(overdueDays, 10) || 7);
+    const groups = {};
+    Object.keys(state.bugs || {}).forEach((id) => {
+      const rec = state.bugs[id];
+      if (!isActive(rec)) return;
+      const v = (rec.fields['发现发布'] || '').trim() || '未标注';
+      if (!inList(v)) return;
+      const o = ownerOf(rec);
+      if (ownerFilter && o !== ownerFilter) return;
+      const d = parseInt(String(rec.fields['停留天数'] == null ? '' : rec.fields['停留天数']).trim(), 10) || 0;
+      if (d < od) return;
+      if (!groups[o]) groups[o] = [];
+      groups[o].push({
+        id: String(id),
+        days: d,
+        sev: String(rec.fields['严重程度'] == null ? '' : rec.fields['严重程度']).trim(),
+        ver: v,
+        title: String(rec.fields['标题'] == null ? '' : rec.fields['标题']).trim()
+      });
+    });
+    const owners = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length);
+    const stamp = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const lines = [];
+    lines.push(`超期 BUG 清单（停留 ≥ ${od} 天）· 生成时间 ${stamp.getFullYear()}-${pad(stamp.getMonth() + 1)}-${pad(stamp.getDate())} ${pad(stamp.getHours())}:${pad(stamp.getMinutes())}`);
+    if (list.length) lines.push(`版本范围：${list.join('、')}`);
+    if (ownerFilter) lines.push(`责任人：${ownerFilter}`);
+    lines.push('');
+    let total = 0;
+    owners.forEach((o) => {
+      const lst = groups[o].slice().sort((a, b) => b.days - a.days);
+      total += lst.length;
+      lines.push(`${o}（${lst.length} 条）`);
+      lst.forEach((r) => lines.push(`${r.id} · 停留 ${r.days} 天 · ${r.sev || '—'} · ${r.ver} · ${r.title}`));
+      lines.push('');
+    });
+    if (!owners.length) lines.push('（当前范围内无超期 BUG）');
+    else lines.push(`合计 ${total} 条 · ${owners.length} 位责任人`);
+    return lines.join('\n');
+  }
+
   /** 快照摘要（含版本维度明细，用于看板按版本筛选趋势） */
   function snapshotSummary(at, imported, solved, reactivated, totalActive, byVersion, versionCounts) {
     return { at, imported, solved, reactivated, totalActive, byVersion: byVersion || {}, versionCounts: versionCounts || {} };
@@ -1239,6 +1320,8 @@
     trendSeries,
     periodCompare,
     versionResolution,
+    ownerWorkload,
+    buildOverdueListText,
     monthStats,
     findAbnormalIds,
     detectCsvEncoding,

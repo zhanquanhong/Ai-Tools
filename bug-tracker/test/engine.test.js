@@ -1417,5 +1417,48 @@ test('versionResolution：按版本 总数/已修复/解决率 + 版本过滤（
   assert.strictEqual(E.versionResolution(s, []).length, 2, '空数组 = 全部');
 });
 
+// ---------- v1.49.0：责任人负载 + 超期清单文本 ----------
+test('ownerWorkload：负载指标（未解决/超期/严重/平均/最长/分布）（v1.49.0）', () => {
+  const s = E.emptyState('1.0.0');
+  E.applyImport(s, [
+    row('B1', { '当前责任人': '张三', '停留天数': '10', '严重程度': '严重', '发现发布': 'V1.0' }),
+    row('B2', { '当前责任人': '张三', '停留天数': '4', '严重程度': '一般', '发现发布': 'V1.0' }),
+    row('B3', { '当前责任人': '李四', '停留天数': '2', '严重程度': '一般', '发现发布': 'V2.0' })
+  ], '2026-08-12T09:00:00');
+  const wl = E.ownerWorkload(s, [], 5);
+  assert.strictEqual(wl.length, 2);
+  const z = wl.find((x) => x.owner === '张三');
+  assert.strictEqual(z.active, 2);
+  assert.strictEqual(z.overdue, 1, '停留 10 ≥ 阈值 5');
+  assert.strictEqual(z.severe, 1, '停留 10 ≥ 2×阈值 = 严重超期');
+  assert.strictEqual(z.avgDays, 7);
+  assert.strictEqual(z.maxDays, 10);
+  assert.strictEqual(z.bySeverity['严重'], 1);
+  assert.strictEqual(wl[0].owner, '张三', '按超期数降序');
+  assert.strictEqual(E.ownerWorkload(s, ['V2.0'], 5).length, 1, '版本过滤');
+  assert.strictEqual(E.ownerWorkload(s, [], 5).find((x) => x.owner === '李四').overdue, 0);
+});
+
+test('buildOverdueListText：按责任人分组 + 组内停留降序 + 指定责任人（v1.49.0）', () => {
+  const s = E.emptyState('1.0.0');
+  E.applyImport(s, [
+    row('B1', { '当前责任人': '张三', '停留天数': '9', '严重程度': '严重', '标题': '甲' }),
+    row('B2', { '当前责任人': '张三', '停留天数': '20', '严重程度': '一般', '标题': '乙' }),
+    row('B3', { '当前责任人': '李四', '停留天数': '6', '严重程度': '轻微', '标题': '丙' }),
+    row('B4', { '当前责任人': '李四', '停留天数': '1', '标题': '不超期' })
+  ], '2026-08-12T09:00:00');
+  const t = E.buildOverdueListText(s, [], 5, '');
+  assert.ok(t.indexOf('超期 BUG 清单（停留 ≥ 5 天）') !== -1);
+  assert.ok(t.indexOf('张三（2 条）') !== -1 && t.indexOf('李四（1 条）') !== -1);
+  assert.ok(t.indexOf('B2 · 停留 20 天') < t.indexOf('B1 · 停留 9 天'), '组内停留天数降序');
+  assert.ok(t.indexOf('张三（2 条）') < t.indexOf('李四（1 条）'), '组间按条数降序');
+  assert.ok(t.indexOf('B4') === -1, '未超期不入清单');
+  assert.ok(t.indexOf('合计 3 条 · 2 位责任人') !== -1);
+  const one = E.buildOverdueListText(s, [], 5, '李四');
+  assert.ok(one.indexOf('李四（1 条）') !== -1 && one.indexOf('张三') === -1);
+  const none = E.buildOverdueListText(s, ['V9.9'], 5, '');
+  assert.ok(none.indexOf('（当前范围内无超期 BUG）') !== -1);
+});
+
 console.log(`\n结果：${passed} 通过, ${failed} 失败\n`);
 process.exit(failed > 0 ? 1 : 0);

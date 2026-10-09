@@ -5,7 +5,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.48.0';
+  const APP_VERSION = '1.49.0';
   // 更新日志从后端 API 拉取（data/changelog.json），不再硬编码在前端
   let CHANGELOG = [];
   // 历史更新日志已迁移至 data/changelog.json（63 条，v1.0.0 ~ v1.33.1），由 /api/changelog 提供
@@ -1175,20 +1175,20 @@
   }
 
   function renderOwnerStats(stats) {
-    const owners = Object.keys(stats.byOwner).sort((a, b) => stats.byOwner[b].active - stats.byOwner[a].active);
+    const ovDays = stats.overdueThreshold;
+    const wl = Engine.ownerWorkload(state, getVerList(), ovDays);
+    const owners = wl.slice().sort((a, b) => b.active - a.active);   // 保持既有排序（未解决数降序）
     $('#ownerTotal').textContent = owners.length + ' 人';
     if (!owners.length) { $('#ownerStats').innerHTML = '<div style="color:#b0b0b0;font-size:12px;padding:8px 0">暂无数据</div>'; return; }
-    const maxActive = Math.max(1, ...owners.map((o) => stats.byOwner[o].active));
+    const maxActive = Math.max(1, ...owners.map((o) => o.active));
     $('#ownerStats').innerHTML = owners.map((o, idx) => {
-      const info = stats.byOwner[o];
-      const width = Math.round(info.active / maxActive * 100);
-      const overdueTag = info.overdue ? `<span class="badge-old">超期 ${info.overdue}</span>` : '';
-      // v1.42.1：「最长停留」= 该责任人名下停留天数最大值；「超期」徽标 = 超期数量，两者语义区分
-      return `<div class="person-row" data-owner="${encodeURIComponent(o)}" title="点击查看 ${o} 的问题列表">
+      const width = Math.round(o.active / maxActive * 100);
+      const overdueTag = o.overdue ? `<span class="badge-old">超期 ${o.overdue}</span>` : '';
+      return `<div class="person-row" data-owner="${encodeURIComponent(o.owner)}" title="点击查看 ${escapeHtml(o.owner)} 的问题列表">
         <span class="owner-idx">${idx + 1}</span>
-        <div class="avatar" style="background:${avatarColor(o)}">${o.charAt(0)}</div>
-        <div class="person-meta"><div class="name">${o} ${overdueTag}</div>
-        <div class="nums">未解决 ${info.active} · 最长停留 ${info.maxDays} 天</div></div>
+        <div class="avatar" style="background:${avatarColor(o.owner)}">${escapeHtml(o.owner.charAt(0))}</div>
+        <div class="person-meta"><div class="name">${escapeHtml(o.owner)} ${overdueTag}<span class="owner-detail" data-owner="${encodeURIComponent(o.owner)}" title="查看负载详情 / 导出 / 推送">负载 ▸</span></div>
+        <div class="nums">未解决 ${o.active} · 超期 ${o.overdue} · 平均 ${o.avgDays} 天 · 最长 ${o.maxDays} 天</div></div>
         <div class="person-bar"><i style="width:${width}%"></i></div>
       </div>`;
     }).join('');
@@ -1206,6 +1206,100 @@
         renderList();
       });
     });
+    // v1.49.0：「负载 ▸」→ 责任人负载详情弹层（阻止冒泡，不触发跳列表）
+    $$('#ownerStats .owner-detail').forEach((el) => {
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        openOwnerModal(decodeURIComponent(el.dataset.owner));
+      });
+    });
+  }
+
+  // ---------- 责任人负载详情（v1.49.0） ----------
+  /** 打开责任人负载详情：指标 + 超期清单 + 筛到列表 / 导出 / 推送（推送仅管理员） */
+  function openOwnerModal(owner) {
+    const ovDays = (Engine.computeStats(state, state.overdueDays).overdueThreshold) || 5;
+    const wl = Engine.ownerWorkload(state, getVerList(), ovDays).find((x) => x.owner === owner);
+    modalOwner = owner;
+    $('#ownerModalTitle').textContent = `👤 ${owner} · 负载详情`;
+    const sevTxt = wl ? Object.keys(wl.bySeverity).sort((a, b) => wl.bySeverity[b] - wl.bySeverity[a])
+      .map((k) => `${escapeHtml(k)} ${wl.bySeverity[k]}`).join(' · ') : '—';
+    $('#ownerModalStat').innerHTML = wl ? `
+      <div class="om-stat"><b>${wl.active}</b><span>未解决</span></div>
+      <div class="om-stat ${wl.overdue ? 'warn' : ''}"><b>${wl.overdue}</b><span>超期(≥${ovDays}天)</span></div>
+      <div class="om-stat ${wl.severe ? 'danger' : ''}"><b>${wl.severe}</b><span>严重(≥${ovDays * 2}天)</span></div>
+      <div class="om-stat"><b>${wl.avgDays}</b><span>平均停留(天)</span></div>
+      <div class="om-stat"><b>${wl.maxDays}</b><span>最长停留(天)</span></div>
+      <div class="om-stat wide"><b>${sevTxt}</b><span>严重程度分布</span></div>` : '<div style="color:#b0b0b0">当前版本筛选下该责任人无活跃 BUG</div>';
+    // 超期清单（前 50 条）
+    const rows = [];
+    Object.keys(state.bugs).forEach((id) => {
+      const rec = state.bugs[id];
+      if (!Engine.isActive(rec)) return;
+      if (Engine.ownerOf(rec) !== owner) return;
+      const d = parseInt(String(rec.fields['停留天数'] == null ? '' : rec.fields['停留天数']).trim(), 10) || 0;
+      if (d < ovDays) return;
+      rows.push({ id, d, sev: String(rec.fields['严重程度'] || '').trim(), ver: String(rec.fields['发现发布'] || '').trim(), title: String(rec.fields['标题'] || '').trim() });
+    });
+    rows.sort((a, b) => b.d - a.d);
+    const shown = rows.slice(0, 50);
+    $('#ownerModalList').innerHTML = shown.length ? `<table class="om-table">
+        <thead><tr><th>编号</th><th>停留</th><th>严重程度</th><th>版本</th><th>标题</th></tr></thead>
+        <tbody>${shown.map((r) => `<tr>
+          <td class="om-id">${escapeHtml(r.id)}</td>
+          <td class="om-days ${r.d >= ovDays * 2 ? 'over' : ''}">${r.d} 天</td>
+          <td>${escapeHtml(r.sev || '—')}</td>
+          <td>${escapeHtml(r.ver || '—')}</td>
+          <td class="om-title" title="${escapeHtml(r.title)}">${escapeHtml(r.title)}</td>
+        </tr>`).join('')}</tbody></table>
+      ${rows.length > shown.length ? `<div class="om-more">…共 ${rows.length} 条超期，仅展示前 ${shown.length} 条（完整清单请用「导出超期清单」）</div>` : ''}`
+      : '<div class="om-empty">当前版本筛选下该责任人无超期 BUG 👍</div>';
+    $('#ownerModalExport').textContent = `📤 导出该人超期清单（${rows.length}）`;
+    $('#ownerModalExport').disabled = rows.length === 0;
+    const pushBtn = $('#ownerModalPush');
+    const isAdmin = (currentUserRole || localStorage.getItem('bugtracker:role') || 'user') === 'admin';
+    pushBtn.style.display = isAdmin ? '' : 'none';
+    pushBtn.disabled = rows.length === 0;
+    $('#ownerModal').classList.remove('hidden');
+  }
+
+  let modalOwner = null;   // 当前查看负载详情的人
+
+  /** 导出超期清单（v1.49.0）：当前版本筛选口径；owner 为空则按全部责任人分组 */
+  function exportOverdueList(owner) {
+    const ovDays = (Engine.computeStats(state, state.overdueDays).overdueThreshold) || 5;
+    const verList = getVerList();
+    const text = Engine.buildOverdueListText(state, verList, ovDays, owner || '');
+    if (text.indexOf('（当前范围内无超期 BUG）') !== -1) { showAlert('当前范围内没有超期 BUG 可导出', true); return; }
+    const name = owner ? `超期清单-${owner}-${todayStr()}.txt` : `超期清单-按责任人-${todayStr()}.txt`;
+    const blob = new Blob(['\uFEFF' + text], { type: 'text/plain;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    showAlert(owner ? `✅ 已导出 ${owner} 的超期清单` : '✅ 已导出超期清单（按责任人分组）');
+  }
+
+  /** 推送该责任人超期清单到飞书（v1.49.0，仅管理员；复用服务器提醒通道） */
+  async function pushOwnerOverdue(owner) {
+    if (!confirm(`确定把「${owner}」的超期清单推送到飞书群？`)) return;
+    const btn = $('#ownerModalPush');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch('/api/notify/owner', {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ owner: owner, versions: getVerList() })
+      });
+      const data = await res.json();
+      const ok = res.ok && data.ok;
+      showAlert(ok ? (data.message || '已推送') : ('推送失败：' + (data.error || ('HTTP ' + res.status))), !ok);
+    } catch (e) {
+      showAlert('推送失败：' + e.message, true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   // ---------- 视图：BUG 列表 ----------
@@ -2598,6 +2692,22 @@
     });
     // 问题统计弹窗（v1.33.0）
     $('#btnStatsModal').addEventListener('click', openStatsModal);
+    // v1.49.0：超期清单一键导出 + 责任人负载详情弹层
+    $('#btnExportOverdue').addEventListener('click', () => exportOverdueList(''));
+    $('#ownerModalExport').addEventListener('click', () => { if (modalOwner) exportOverdueList(modalOwner); });
+    $('#ownerModalPush').addEventListener('click', () => { if (modalOwner) pushOwnerOverdue(modalOwner); });
+    $('#ownerModalFilter').addEventListener('click', () => {
+      if (!modalOwner) return;
+      $('#ownerModal').classList.add('hidden');
+      activeFilters = { '当前责任人': { type: 'enum', value: [modalOwner] } };
+      const dv = state.dashboardVersions || [];
+      if (dv.length) activeFilters['发现发布'] = { type: 'enum', value: dv.slice() };
+      quickSearch = '';
+      const qs = $('#quickSearch');
+      if (qs) qs.value = '';
+      switchView('list');
+      renderList();
+    });
     // 超期提醒（v1.46.0，仅管理员可见）
     $('#btnNotify').addEventListener('click', openNotifyModal);
     $('#btnNotifyPreview').addEventListener('click', previewNotify);

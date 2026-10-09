@@ -7,7 +7,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>BUG 处理进展跟踪</title>
-<link rel="stylesheet" href="css/style.css?v=1480">
+<link rel="stylesheet" href="css/style.css?v=1490">
 </head>
 <body>
 <div class="app">
@@ -101,6 +101,7 @@
       </div>
       <span class="vfb-hint">支持多选版本，统计卡 / 严重程度 / 趋势 / 环比 / 解决率 / 责任人维度 均按所选版本展示</span>
       <button class="btn btn-sm" id="btnNotify" style="display:none">📨 超期提醒</button>
+      <button class="btn btn-sm" id="btnExportOverdue" title="导出超期清单（按责任人分组，跟随版本筛选）">📤 超期清单</button>
       <button class="btn btn-sm" id="btnStatsModal" style="margin-left:auto">📊 问题统计</button>
       <button class="btn btn-primary btn-sm" id="btnExportBugList">📤 导出问题清单</button>
     </div>
@@ -480,13 +481,30 @@
   </div>
 </div>
 
+<!-- ============ 模态框：责任人负载详情（v1.49.0） ============ -->
+<div class="modal-mask hidden" id="ownerModal">
+  <div class="modal modal-lg">
+    <div class="modal-head"><h3 id="ownerModalTitle">👤 负载详情</h3><span class="modal-close" data-close="ownerModal">✕</span></div>
+    <div class="modal-body">
+      <div class="om-stats" id="ownerModalStat"></div>
+      <div class="om-sub">超期清单（按停留天数降序，前 50 条）</div>
+      <div id="ownerModalList" class="om-list"></div>
+      <div class="om-actions">
+        <button class="btn btn-plain btn-sm" id="ownerModalFilter">🔎 在列表中筛选此人</button>
+        <button class="btn btn-plain btn-sm" id="ownerModalExport">📤 导出该人超期清单</button>
+        <button class="btn btn-primary btn-sm" id="ownerModalPush" style="display:none">📨 推送到飞书</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- 列筛选弹层 -->
 <div class="filter-pop hidden" id="filterPop"></div>
 
 <script src="vendor/echarts.min.js"></script>
-<script src="js/engine.js?v=1480"></script>
-<script src="js/storage.js?v=1480"></script>
-<script src="js/parser.js?v=1480"></script>
-<script src="js/app.js?v=1480"></script>
+<script src="js/engine.js?v=1490"></script>
+<script src="js/storage.js?v=1490"></script>
+<script src="js/parser.js?v=1490"></script>
+<script src="js/app.js?v=1490"></script>
 </body>
 </html>

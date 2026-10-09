@@ -530,14 +530,17 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             self._json(200, {'ok': True, 'backup_id': backup_id, 'message': '备份完成：%s' % backup_id})
             return
-        if path in ('/api/notify/preview', '/api/notify/test'):
+        if path in ('/api/notify/preview', '/api/notify/test', '/api/notify/owner'):
             if not self._is_authed():
                 self._json(401, {'ok': False, 'error': '未登录或登录已过期'})
                 return
             if not self._is_admin():
                 self._json(403, {'ok': False, 'error': '仅管理员可操作提醒推送'})
                 return
-            self._post_notify(dry_run=(path == '/api/notify/preview'))
+            if path == '/api/notify/owner':
+                self._post_notify_owner()
+            else:
+                self._post_notify(dry_run=(path == '/api/notify/preview'))
             return
         self.send_error(404, 'Not Found')
 
@@ -822,6 +825,45 @@ class Handler(SimpleHTTPRequestHandler):
             self._json(502, {'ok': False, 'error': '推送失败：%s' % err})
             return
         self._json(200, {'ok': True, 'message': '已推送（超期 %s 条）' % digest['stats'].get('overdue'), 'stats': digest['stats']})
+
+    def _post_notify_owner(self):
+        """推送某责任人的超期清单（v1.49.0）。body: {"owner": "张三", "versions": ["V1.0"]}"""
+        try:
+            length = int(self.headers.get('Content-Length', 0) or 0)
+            raw = self.rfile.read(length) if length else b''
+            data = json.loads(raw.decode('utf-8')) if raw else {}
+            if not isinstance(data, dict):
+                raise ValueError('body 必须是 JSON 对象')
+        except Exception as e:  # noqa: BLE001
+            self._json(400, {'ok': False, 'error': '请求体无效: %s' % e})
+            return
+        owner = str(data.get('owner', '')).strip()
+        if not owner:
+            self._json(400, {'ok': False, 'error': '缺少 owner（责任人姓名）'})
+            return
+        versions = data.get('versions')
+        if not isinstance(versions, list):
+            versions = []
+        versions = [str(v) for v in versions][:50]
+        cfg = notifier.load_config()
+        if not str(cfg.get('webhook') or '').strip():
+            self._json(400, {'ok': False, 'error': '未配置飞书 webhook（环境变量 BT_FEISHU_WEBHOOK 或 data/notify.json），无法推送'})
+            return
+        state = notifier.load_state()
+        digest = notifier.build_digest(state, cfg, url=self._base_url(), owner=owner, versions=versions)
+        ok, err = notifier.send_feishu(cfg, digest['title'], digest['markdown'])
+        cookie = self.headers.get('Cookie')
+        notifier.append_log({
+            'time': time.strftime('%Y-%m-%d %H:%M:%S'), 'reason': 'owner', 'owner': owner,
+            'ok': bool(ok), 'err': '' if ok else str(err),
+            'active': digest['stats'].get('active'), 'overdue': digest['stats'].get('overdue'),
+            'severe': digest['stats'].get('severe'),
+            'operator': session_user(parse_cookie(cookie)) or '',
+        })
+        if not ok:
+            self._json(502, {'ok': False, 'error': '推送失败：%s' % err})
+            return
+        self._json(200, {'ok': True, 'message': '已推送「%s」超期清单（%s 条）' % (owner, digest['stats'].get('overdue')), 'stats': digest['stats']})
 
     # ---------- 工具 ----------
     def _json(self, code, obj):

@@ -10,6 +10,8 @@
 
 运行：python3 -m pytest test/test_notify_api.py -q
 """
+import io
+import json
 import os
 import sys
 
@@ -132,4 +134,59 @@ class TestNotifyTestApi:
         h._post_notify(dry_run=False)
         assert h.captured['code'] == 502
         assert '9499' in h.captured['obj']['error']
+        assert notifier.last_result()['ok'] is False
+
+
+# ---------------------------------------------------------------- v1.49.0：责任人推送 API
+class TestNotifyOwnerApi:
+    def _handler(self, body=None, host='1.2.3.4:8092'):
+        h = _h(host=host)
+        h._post_notify_owner = server.Handler._post_notify_owner.__get__(h)
+        raw = json.dumps(body or {}, ensure_ascii=False).encode('utf-8')
+        h.rfile = io.BytesIO(raw)
+        h.headers['Content-Length'] = str(len(raw))
+        return h
+
+    def test_缺少owner(self, monkeypatch):
+        monkeypatch.setattr(notifier, 'load_config', lambda: _cfg())
+        h = self._handler({'versions': []})
+        h._post_notify_owner()
+        assert h.captured['code'] == 400 and '缺少 owner' in h.captured['obj']['error']
+
+    def test_请求体非法(self, monkeypatch):
+        h = _h()
+        h._post_notify_owner = server.Handler._post_notify_owner.__get__(h)
+        h.rfile = io.BytesIO(b'not-json')
+        h.headers['Content-Length'] = '8'
+        h._post_notify_owner()
+        assert h.captured['code'] == 400 and '请求体无效' in h.captured['obj']['error']
+
+    def test_未配置webhook拒绝(self, monkeypatch):
+        monkeypatch.setattr(notifier, 'load_config', lambda: _cfg(webhook=''))
+        h = self._handler({'owner': '张三'})
+        h._post_notify_owner()
+        assert h.captured['code'] == 400 and '未配置' in h.captured['obj']['error']
+
+    def test_推送成功写日志含owner与版本(self, monkeypatch):
+        monkeypatch.setattr(notifier, 'load_config', lambda: _cfg())
+        monkeypatch.setattr(notifier, 'load_state', lambda: {'bugs': {}, 'snapshots': []})
+        seen = {}
+        def _fake_send(cfg, title, md, **kw):
+            seen['title'] = title
+            return True, ''
+        monkeypatch.setattr(notifier, 'send_feishu', _fake_send)
+        h = self._handler({'owner': '李四', 'versions': ['V1.0', 'V2.0']})
+        h._post_notify_owner()
+        assert h.captured['code'] == 200 and '李四' in h.captured['obj']['message']
+        assert '李四' in seen['title'] and 'V1.0' not in seen['title'], '标题含责任人'
+        rec = notifier.last_result()
+        assert rec['ok'] is True and rec['reason'] == 'owner' and rec['owner'] == '李四'
+
+    def test_推送失败返回502(self, monkeypatch):
+        monkeypatch.setattr(notifier, 'load_config', lambda: _cfg())
+        monkeypatch.setattr(notifier, 'load_state', lambda: {'bugs': {}, 'snapshots': []})
+        monkeypatch.setattr(notifier, 'send_feishu', lambda *a, **k: (False, 'code=19001'))
+        h = self._handler({'owner': '王五'})
+        h._post_notify_owner()
+        assert h.captured['code'] == 502
         assert notifier.last_result()['ok'] is False
